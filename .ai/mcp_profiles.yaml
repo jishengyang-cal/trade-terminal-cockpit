@@ -1,0 +1,31 @@
+schema_version: mcp_profiles/v1
+source_of_truth: imperativ://catalog/entities/ai-governance/construction-governance.json
+
+controls:
+  command_gateway_required: true
+  audit_required: true
+  grants_authority: false
+  direct_provider_call_allowed: false
+  mcp_internal_authority_allowed: false
+
+profiles:
+  review-readonly:
+    github_write: false
+    shell_write: false
+    authority_grant: false
+    command_gateway_required_for_side_effects: true
+    tools:
+      - codegraph_ro
+      - gitnexus_ro
+      - contract_registry_ro
+
+  implement-local:
+    github_write: false
+    shell_write: true
+    authority_grant: false
+    command_gateway_required_for_side_effects: true
+    tools:
+      - codegraph_ro
+      - gitnexus_ro
+      - contract_registry_ro
+      - governed_mcp_gateway

@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package trading.v1;
+
+import "trading/common.proto";
+
+message EventEnvelope {
+  string event_id = 1;
+  string event_type = 2;
+  string aggregate_type = 3;
+  string aggregate_id = 4;
+  string correlation_id = 5;
+  string causation_id = 6;
+  int64 source_ts_ns = 7;
+  int64 ingest_ts_ns = 8;
+  int64 publish_ts_ns = 9;
+  uint64 sequence = 10;
+  string producer = 11;
+  string schema_version = 12;
+  bytes payload = 13;
+}
+
+message StrategyHeartbeat {
+  string strategy_id = 1;
+  StrategyState state = 2;
+  AccountMode mode = 3;
+  uint64 heartbeat_lag_ms = 4;
+}
+
+message StrategyStateChanged {
+  string strategy_id = 1;
+  StrategyState state = 2;
+  AccountMode mode = 3;
+  string reason = 4;
+}
+
+message IntentCreated {
+  string correlation_id = 1;
+  string strategy_id = 2;
+  string symbol = 3;
+  OrderSide side = 4;
+  int64 quantity = 5;
+  string reason = 6;
+}
+
+message RiskDecisionMade {
+  string correlation_id = 1;
+  string strategy_id = 2;
+  string symbol = 3;
+  RiskDecision decision = 4;
+  repeated string reason_codes = 5;
+}
+
+message OrderSubmitRequested {
+  string correlation_id = 1;
+  string account_id = 2;
+  string order_id = 3;
+  string order_type = 4;
+  optional double limit_price = 5;
+  string tif = 6;
+}
+
+message OrderSubmitted {
+  string correlation_id = 1;
+  string account_id = 2;
+  string order_id = 3;
+  string broker = 4;
+}
+
+message BrokerAckReceived {
+  string correlation_id = 1;
+  string account_id = 2;
+  string order_id = 3;
+  string broker_order_id = 4;
+  string broker_status = 5;
+}
+
+message OrderFill {
+  string correlation_id = 1;
+  string account_id = 2;
+  string order_id = 3;
+  int64 filled_quantity = 4;
+  double fill_price = 5;
+}
+
+message CancelRequested {
+  string correlation_id = 1;
+  string account_id = 2;
+  string order_id = 3;
+  string reason = 4;
+}
+
+message OrderCancelled {
+  string correlation_id = 1;
+  string account_id = 2;
+  string order_id = 3;
+}
+
+message OrderRejected {
+  string correlation_id = 1;
+  string account_id = 2;
+  string order_id = 3;
+  string reason = 4;
+}
+
+message PositionSnapshot {
+  string account_id = 1;
+  string symbol = 2;
+  int64 net_quantity = 3;
+  double average_price = 4;
+  double market_price = 5;
+  repeated StrategyPositionAttribution strategy_attribution = 6;
+}
+
+message RiskLimitBreached {
+  string scope = 1;
+  string severity = 2;
+  string message = 3;
+}
+
+message AlertRaised {
+  string alert_id = 1;
+  string severity = 2;
+  string domain = 3;
+  string message = 4;
+}
+
+message AlertAcknowledged {
+  string alert_id = 1;
+  string operator_id = 2;
+  string reason = 3;
+}
+
+message CommandAuditRecorded {
+  string command_id = 1;
+  string operator_id = 2;
+  string command_type = 3;
+  string status = 4;
+  string reason = 5;
+}

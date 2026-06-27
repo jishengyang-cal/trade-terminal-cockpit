@@ -1,0 +1,11 @@
+/target/
+/.run/
+/.env
+/.env.*
+*.log
+*.pid
+*.sock
+*.tmp
+__pycache__/
+*.py[cod]
+.DS_Store

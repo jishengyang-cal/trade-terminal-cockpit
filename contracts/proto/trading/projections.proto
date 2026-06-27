@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package trading.v1;
+
+import "trading/common.proto";
+
+message OverviewSnapshot {
+  string account_id = 1;
+  AccountMode mode = 2;
+  string broker = 3;
+  bool broker_connected = 4;
+  double cash = 5;
+  double buying_power = 6;
+  double day_pnl = 7;
+  double realized_pnl = 8;
+  double unrealized_pnl = 9;
+  double exposure_pct = 10;
+  double margin_usage_pct = 11;
+  bool short_permission = 12;
+  uint64 short_intents_blocked_today = 13;
+  string risk_state = 14;
+}
+
+message StrategySnapshot {
+  string strategy_id = 1;
+  StrategyState state = 2;
+  AccountMode mode = 3;
+  uint64 universe_count = 4;
+  uint64 signals = 5;
+  uint64 intents = 6;
+  uint64 orders = 7;
+  double pnl = 8;
+  uint64 heartbeat_lag_ms = 9;
+}
+
+message OrderTimelineEntry {
+  uint64 sequence = 1;
+  int64 ts_ns = 2;
+  string kind = 3;
+  string summary = 4;
+}
+
+message OrderTimeline {
+  string correlation_id = 1;
+  string strategy_id = 2;
+  string account_id = 3;
+  string symbol = 4;
+  OrderSide side = 5;
+  int64 intended_quantity = 6;
+  OrderLifecycleState state = 7;
+  string order_id = 8;
+  string broker_order_id = 9;
+  int64 filled_quantity = 10;
+  optional double average_fill_price = 11;
+  repeated OrderTimelineEntry timeline = 12;
+}
+
+message PositionProjection {
+  string account_id = 1;
+  string symbol = 2;
+  int64 net_quantity = 3;
+  double average_price = 4;
+  double market_price = 5;
+  double unrealized_pnl = 6;
+  repeated StrategyPositionAttribution strategy_attribution = 7;
+}
+
+message RiskBlock {
+  string scope = 1;
+  string severity = 2;
+  string message = 3;
+}
+
+message RiskSnapshot {
+  string global_state = 1;
+  bool kill_switch_active = 2;
+  bool market_data_fresh = 3;
+  bool broker_order_channel_ok = 4;
+  bool day_max_loss_breached = 5;
+  bool quote_staleness_ok = 6;
+  bool short_permission = 7;
+  repeated RiskBlock active_blocks = 8;
+}
+
+message EventFilter {
+  string strategy_id = 1;
+  string symbol = 2;
+  string order_id = 3;
+  string correlation_id = 4;
+  string event_type = 5;
+  string severity = 6;
+  string source = 7;
+  int64 from_ts_ns = 8;
+  int64 to_ts_ns = 9;
+}

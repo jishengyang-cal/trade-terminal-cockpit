@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package trading.v1;
+
+enum DangerLevel {
+  DANGER_LEVEL_UNSPECIFIED = 0;
+  DANGER_LEVEL_READ_ONLY = 1;
+  DANGER_LEVEL_CONTROLLED = 2;
+  DANGER_LEVEL_DANGEROUS = 3;
+}
+
+message CommandEnvelope {
+  string command_id = 1;
+  string command_type = 2;
+  string operator_id = 3;
+  string session_id = 4;
+  string aggregate_type = 5;
+  string aggregate_id = 6;
+  string correlation_id = 7;
+  int64 requested_ts_ns = 8;
+  string reason = 9;
+  string capability = 10;
+  DangerLevel danger_level = 11;
+  bytes payload = 12;
+}
+
+message PauseStrategyRequested {
+  string strategy_id = 1;
+}
+
+message ResumeStrategyRequested {
+  string strategy_id = 1;
+}
+
+message DrainStrategyRequested {
+  string strategy_id = 1;
+}
+
+message KillStrategyRequested {
+  string strategy_id = 1;
+}
+
+message CancelOrderRequested {
+  string account_id = 1;
+  string order_id = 2;
+}
+
+message CancelAllOrdersForSymbolRequested {
+  string account_id = 1;
+  string symbol = 2;
+}
+
+message FlattenSymbolRequested {
+  string account_id = 1;
+  string symbol = 2;
+}
+
+message GlobalKillSwitchRequested {
+  string account_id = 1;
+}
+
+message AcknowledgeAlertRequested {
+  string alert_id = 1;
+}

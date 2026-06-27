@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "imperativ-target-hooks/v1",
+  "sourceOfTruth": "imperativ://catalog/entities/ai-governance/construction-governance.json",
+  "controls": {
+    "commandGatewayRequired": true,
+    "auditRequired": true,
+    "grantsAuthority": false,
+    "directProviderCallAllowed": false,
+    "shellOnlyPolicyAuthorityAllowed": false,
+    "uiOnlyPolicyAuthorityAllowed": false
+  },
+  "entrypoints": [
+    {
+      "entrypoint": "ai-console",
+      "hookRole": "read-model-consumer",
+      "policyContext": "/v1/ai-console/policy-context"
+    },
+    {
+      "entrypoint": "shell-codex",
+      "hookRole": "runtime-context-injection-and-evidence",
+      "launcher": "$HOME/.codex/imperativ_hook_launcher.py",
+      "providerRoot": "$HOME/projects/imperativ",
+      "hooks": [
+        "tools/codex_source_intelligence_hook.py",
+        "tools/codex_policy_context_hook.py",
+        "tools/codex_construction_governance_hook.py",
+        "tools/codex_agent_memory_hook.py"
+      ]
+    },
+    {
+      "entrypoint": "agent-runtime",
+      "hookRole": "job-runtime-policy-context-consumer",
+      "runtimeApis": [
+        "/v1/agent-jobs/runtime/claim",
+        "/v1/agent-jobs/runtime/tick",
+        "/v1/agent-jobs/runtime/transition"
+      ]
+    }
+  ]
+}

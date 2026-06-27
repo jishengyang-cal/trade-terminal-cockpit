@@ -1,0 +1,30 @@
+schema_version: tool_policy/v1
+source_of_truth: imperativ://catalog/entities/ai-governance/construction-governance.json
+default_profile: review-readonly
+auto_approve_permissions: false
+
+controls:
+  command_gateway_required: true
+  audit_required: true
+  grants_authority: false
+  direct_provider_call_allowed: false
+
+tools:
+  codegraph_ro:
+    mode: read-only
+    side_effect: read
+    command_gateway_required: false
+  gitnexus_ro:
+    mode: read-only
+    side_effect: read
+    command_gateway_required: false
+  contract_registry_ro:
+    mode: read-only
+    side_effect: read
+    command_gateway_required: false
+  governed_mcp_gateway:
+    mode: governed-gateway
+    side_effect: external
+    command: mcp.tool.invoke
+    command_gateway_required: true
+    approval_required: true

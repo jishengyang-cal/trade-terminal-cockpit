@@ -1,0 +1,17 @@
+[package]
+name = "trade-tui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+serde_json.workspace = true
+trade-core.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
