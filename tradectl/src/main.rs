@@ -1,5 +1,8 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use trade_core::{CommandEnvelope, CommandPayload};
 
 #[derive(Debug, Parser)]
@@ -26,6 +29,9 @@ struct Cli {
 
     #[arg(long)]
     pretty: bool,
+
+    #[arg(long)]
+    audit_jsonl: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -89,12 +95,23 @@ fn main() -> Result<()> {
         payload,
     );
 
+    let compact_json = serde_json::to_string(&envelope)?;
+    if let Some(path) = cli.audit_jsonl.as_deref() {
+        append_audit_jsonl(path, &compact_json)?;
+    }
+
     if cli.pretty {
         println!("{}", serde_json::to_string_pretty(&envelope)?);
     } else {
-        println!("{}", serde_json::to_string(&envelope)?);
+        println!("{compact_json}");
     }
 
+    Ok(())
+}
+
+fn append_audit_jsonl(path: &Path, compact_json: &str) -> Result<()> {
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "{compact_json}")?;
     Ok(())
 }
 

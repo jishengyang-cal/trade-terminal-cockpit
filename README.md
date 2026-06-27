@@ -120,9 +120,14 @@ cargo run -p tradectl -- \
   --session-id session-demo \
   --reason smoke-test \
   --capability strategy.control \
+  --audit-jsonl /tmp/trade-terminal-cockpit-commands.jsonl \
   --pretty \
   pause-strategy open-scalp
 ```
+
+`--audit-jsonl` appends the emitted command envelope to a local evidence file.
+It does not send the command to a broker, risk service, strategy runtime, or
+database.
 
 Dangerous command example:
 

@@ -20,6 +20,16 @@ cargo run -p tradectl -- \
   --capability strategy.control \
   pause-strategy open-scalp | grep -q '"command_type":"PauseStrategyRequested"'
 
+rm -f /tmp/trade-terminal-cockpit-audit.jsonl
+cargo run -p tradectl -- \
+  --operator-id smoke-operator \
+  --session-id smoke-session \
+  --reason smoke-test \
+  --capability strategy.control \
+  --audit-jsonl /tmp/trade-terminal-cockpit-audit.jsonl \
+  pause-strategy open-scalp | grep -q '"command_type":"PauseStrategyRequested"'
+grep -q '"command_type":"PauseStrategyRequested"' /tmp/trade-terminal-cockpit-audit.jsonl
+
 if cargo run -p tradectl -- \
   --operator-id smoke-operator \
   --session-id smoke-session \
