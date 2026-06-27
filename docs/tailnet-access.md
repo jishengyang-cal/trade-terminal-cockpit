@@ -1,10 +1,18 @@
 # Tailnet Access
 
-`trade-terminal-cockpit` is a terminal cockpit, not an HTTP frontend. Do not
-publish it with Tailscale Serve as a web page.
+`trade-terminal-cockpit` is a local terminal cockpit, not an HTTP frontend. Do
+not publish it with Tailscale Serve as a web page.
 
-The supported remote entrypoint is a tailnet SSH session into the trading host,
-then running `trade-tui` inside SSH, tmux, or Zellij:
+Tailnet access is only for auxiliary remote-operator sessions into the trading
+host. It is not the default frontend path and it is not a Google VM deployment
+path. The normal operator workflow is local terminal first:
+
+```bash
+tools/open_local_tui.sh --mock
+```
+
+For a remote operator session, use a tailnet SSH session into the trading host,
+then run the local launcher inside that terminal, tmux, or Zellij:
 
 ```bash
 tools/tailnet_cockpit_url.sh
@@ -19,12 +27,12 @@ The script prints:
 Example local command after connecting:
 
 ```bash
-cargo run -p trade-tui -- --mock
+tools/open_local_tui.sh --mock
 ```
 
 For projection/event testing without broker, database, or service-manager
 coupling, use JSONL:
 
 ```bash
-cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --follow
+tools/open_local_tui.sh --event-jsonl /path/to/events.jsonl --follow
 ```

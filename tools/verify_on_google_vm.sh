@@ -12,7 +12,8 @@ usage() {
 Usage: tools/verify_on_google_vm.sh [--copy-binaries]
 
 Runs the repository verification suite on the Google VM instead of compiling on
-the local workstation:
+the local workstation. The VM is only a build/test worker; it is not a frontend
+deployment target:
   cargo fmt --all -- --check
   cargo test --workspace
   tools/check_repo_boundary.sh
@@ -24,7 +25,7 @@ Environment:
   TRADE_COCKPIT_SSH_TIMEOUT SSH connect timeout seconds, default 10
 
 Options:
-  --copy-binaries           Copy VM-built trade-tui/tradectl into .run/bin/
+  --copy-binaries           Copy VM-built trade-tui/tradectl into local .run/bin/
   -h, --help                Show this help
 EOF
 }

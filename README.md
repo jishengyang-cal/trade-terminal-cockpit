@@ -13,7 +13,7 @@ shared event/command projection types only.
 event store / JetStream / state projection service
   -> trade-core reducer/projection state
   -> trade-tui read-only terminal cockpit
-  -> terminal / SSH / tmux / Zellij
+  -> local terminal / local tmux / local Zellij
 
 operator / automation
   -> tradectl command envelope
@@ -48,7 +48,8 @@ tools/            local boundary and smoke checks
 ## Local Terminal
 
 This repo intentionally has no HTTP frontend address. The frontend is the local
-terminal UI itself.
+terminal UI itself. Google VM is only a build/test worker; it is not a
+deployment target for the trading frontend.
 
 ```bash
 tools/open_local_tui.sh --mock
@@ -58,8 +59,8 @@ tools/open_local_tui.sh --mock
 only opens an existing local `trade-tui` binary from `.run/bin/` or
 `target/debug/`.
 
-To build on the Google VM and copy VM-built binaries back for local terminal
-use:
+To avoid compiling on the workstation, build and test on the Google VM, then
+copy the VM-built binaries back for local terminal use:
 
 ```bash
 tools/verify_on_google_vm.sh --copy-binaries
@@ -68,8 +69,8 @@ tools/open_local_tui.sh --mock
 
 ## Tailnet Access
 
-Tailnet access is for remote operator sessions only, not the default local
-frontend entrypoint:
+Tailnet access is auxiliary remote-operator documentation only. It is not the
+default frontend path and it is not a Google VM deployment path:
 
 ```bash
 tools/tailnet_cockpit_url.sh
@@ -78,15 +79,15 @@ tools/tailnet_cockpit_url.sh
 ## Development
 
 Run Rust builds, tests, and smoke checks on the Google VM, not on the local
-workstation. Local work should stay limited to inspection, edits, and git
-operations.
+workstation. The command is launched locally, but the compile/test work happens
+on the VM and the frontend still runs locally from the copied binary.
 
 ```bash
 tools/verify_on_google_vm.sh
 ```
 
 GitHub Actions is kept as a manual `workflow_dispatch` fallback. The normal
-replacement for GitHub-hosted CI is `tools/verify_on_google_vm.sh`.
+local replacement for GitHub-hosted CI is `tools/verify_on_google_vm.sh`.
 
 Useful VM checks:
 

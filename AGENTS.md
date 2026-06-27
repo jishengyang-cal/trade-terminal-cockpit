@@ -17,8 +17,8 @@ Hard boundaries:
   risk checks, and audit.
 - Open the cockpit in the local terminal with `tools/open_local_tui.sh` when the
   user asks to see the frontend locally. Do not present SSH as the default
-  frontend path; SSH is only for remote operator access or Google VM build
-  verification.
+  frontend path. Google VM is a build/test worker only, not a deployment target
+  for the trading frontend.
 - Do not store credentials, account ids, API keys, tokens, broker configs, or
   private runtime config in this repo.
 - Do not let the terminal render loop query production databases, scan runtime
@@ -36,7 +36,7 @@ Expected production boundary:
 event store / JetStream / state projection service
   -> trade-core reducer/projection state
   -> trade-tui read-only terminal cockpit
-  -> terminal / SSH / tmux / Zellij
+  -> local terminal / local tmux / local Zellij
 
 operator / automation
   -> tradectl command envelope
@@ -63,5 +63,6 @@ Development expectations:
   toolchain policy is explicitly changed.
 - Before publishing changes, validate on the Google VM with
   `tools/verify_on_google_vm.sh`.
-- GitHub Actions is an optional manual fallback only. The normal CI replacement
-  is the repository VM verification script.
+- GitHub Actions is an optional manual fallback only. The normal local CI
+  replacement is the repository VM verification script, launched from this local
+  checkout.
