@@ -317,13 +317,13 @@ fn render_events(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let detail = selected_event(state, app.selected_event_index)
         .map(|event| {
             vec![
-                kv_wide("sequence", &event.sequence.to_string()),
-                kv_wide("event_type", &event.event_type),
-                kv_wide("aggregate_type", &event.aggregate_type),
-                kv_wide("aggregate_id", &event.aggregate_id),
-                kv_wide("correlation_id", &event.correlation_id),
-                kv_wide("producer", &event.producer),
-                kv_wide("publish_ts_ns", &event.ts_ns.to_string()),
+                kv_narrow("seq", &event.sequence.to_string()),
+                kv_narrow("type", &event.event_type),
+                kv_narrow("agg", &event.aggregate_type),
+                kv_narrow("id", &event.aggregate_id),
+                kv_narrow("corr", &event.correlation_id),
+                kv_narrow("prod", &event.producer),
+                kv_narrow("ts_ns", &event.ts_ns.to_string()),
                 String::new(),
                 event.headline.clone(),
             ]
@@ -404,13 +404,12 @@ fn format_order_row(chain: &OrderChain, selected: bool) -> String {
 
 fn format_event_row(event: &EventSummary, selected: bool) -> String {
     format!(
-        "{} #{:<4} {:<22} {:<12} corr={} {}",
+        "{}#{:<4} {:<17} {:<7} {}",
         if selected { ">" } else { " " },
         event.sequence,
-        truncate(&event.event_type, 22),
-        truncate(&event.aggregate_type, 12),
-        truncate(&event.correlation_id, 14),
-        event.headline
+        truncate(&event.event_type, 17),
+        truncate(&event.aggregate_type, 7),
+        truncate(&event.headline, 13)
     )
 }
 
@@ -439,4 +438,8 @@ fn kv(label: &str, value: &str) -> String {
 
 fn kv_wide(label: &str, value: &str) -> String {
     format!("{:<21} {}", truncate(label, 21), value)
+}
+
+fn kv_narrow(label: &str, value: &str) -> String {
+    format!("{:<6} {}", truncate(label, 6), truncate(value, 21))
 }
