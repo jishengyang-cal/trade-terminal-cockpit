@@ -45,19 +45,34 @@ contracts/proto/  language-neutral trading contracts
 tools/            local boundary and smoke checks
 ```
 
+## Local Terminal
+
+This repo intentionally has no HTTP frontend address. The frontend is the local
+terminal UI itself.
+
+```bash
+tools/open_local_tui.sh --mock
+```
+
+`tools/open_local_tui.sh` does not run `cargo` and does not SSH anywhere. It
+only opens an existing local `trade-tui` binary from `.run/bin/` or
+`target/debug/`.
+
+To build on the Google VM and copy VM-built binaries back for local terminal
+use:
+
+```bash
+tools/verify_on_google_vm.sh --copy-binaries
+tools/open_local_tui.sh --mock
+```
+
 ## Tailnet Access
 
-This repo intentionally has no HTTP frontend address. The frontend is the
-terminal UI itself, reached through a tailnet SSH session:
+Tailnet access is for remote operator sessions only, not the default local
+frontend entrypoint:
 
 ```bash
 tools/tailnet_cockpit_url.sh
-```
-
-After connecting to the printed SSH URI, run this from a Google VM checkout:
-
-```bash
-cargo run -p trade-tui -- --mock
 ```
 
 ## Development
@@ -67,10 +82,11 @@ workstation. Local work should stay limited to inspection, edits, and git
 operations.
 
 ```bash
-cargo fmt --all -- --check
-cargo test --workspace
-tools/smoke_check.sh
+tools/verify_on_google_vm.sh
 ```
+
+GitHub Actions is kept as a manual `workflow_dispatch` fallback. The normal
+replacement for GitHub-hosted CI is `tools/verify_on_google_vm.sh`.
 
 Useful VM checks:
 

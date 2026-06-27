@@ -15,6 +15,10 @@ Hard boundaries:
 - `tradectl` emits command envelopes only. Command execution belongs to an
   external command-gateway with auth, capability checks, confirmation policy,
   risk checks, and audit.
+- Open the cockpit in the local terminal with `tools/open_local_tui.sh` when the
+  user asks to see the frontend locally. Do not present SSH as the default
+  frontend path; SSH is only for remote operator access or Google VM build
+  verification.
 - Do not store credentials, account ids, API keys, tokens, broker configs, or
   private runtime config in this repo.
 - Do not let the terminal render loop query production databases, scan runtime
@@ -58,5 +62,6 @@ Development expectations:
   and keep the lockfile compatible with the repository `rust-version` unless the
   toolchain policy is explicitly changed.
 - Before publishing changes, validate on the Google VM with
-  `cargo fmt --all -- --check`, `cargo test --workspace`, and
-  `tools/smoke_check.sh`.
+  `tools/verify_on_google_vm.sh`.
+- GitHub Actions is an optional manual fallback only. The normal CI replacement
+  is the repository VM verification script.

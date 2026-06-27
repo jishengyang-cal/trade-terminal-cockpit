@@ -112,74 +112,53 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .split(area);
 
     let account = vec![
-        format!("account_id            {}", state.account.account_id),
-        format!("mode                  {}", state.account.mode),
-        format!("broker                {}", state.account.broker),
-        format!(
-            "broker_connected      {}",
-            mark(state.account.broker_connected)
+        kv("account", &state.account.account_id),
+        kv("mode", &state.account.mode),
+        kv("broker", &state.account.broker),
+        kv("broker_ok", mark(state.account.broker_connected)),
+        kv("cash", &format!("{:.2}", state.account.cash)),
+        kv("buy_power", &format!("{:.2}", state.account.buying_power)),
+        kv("day_pnl", &format!("{:+.2}", state.account.day_pnl)),
+        kv("realized", &format!("{:+.2}", state.account.realized_pnl)),
+        kv(
+            "unrealized",
+            &format!("{:+.2}", state.account.unrealized_pnl),
         ),
-        format!("cash                  {:.2}", state.account.cash),
-        format!("buying_power          {:.2}", state.account.buying_power),
-        format!("day_pnl               {:+.2}", state.account.day_pnl),
-        format!("realized_pnl          {:+.2}", state.account.realized_pnl),
-        format!("unrealized_pnl        {:+.2}", state.account.unrealized_pnl),
-        format!("exposure_pct          {:.1}%", state.account.exposure_pct),
-        format!(
-            "margin_usage_pct      {:.1}%",
-            state.account.margin_usage_pct
-        ),
+        kv("exposure", &format!("{:.1}%", state.account.exposure_pct)),
+        kv("margin", &format!("{:.1}%", state.account.margin_usage_pct)),
     ];
     frame.render_widget(panel("Account", account), sections[0]);
 
     let system = vec![
-        format!("nats                  {}", state.connection.nats),
-        format!("command_gateway       {}", state.connection.command_gateway),
-        format!(
-            "last_event_sequence   {}",
-            state
+        kv("nats", &state.connection.nats),
+        kv("cmd_gw", &state.connection.command_gateway),
+        kv(
+            "last_seq",
+            &state
                 .connection
                 .last_event_sequence
                 .map(|seq| seq.to_string())
-                .unwrap_or_else(|| "-".to_string())
+                .unwrap_or_else(|| "-".to_string()),
         ),
-        format!("render_fps            {}", state.connection.render_fps),
-        format!("strategies            {}", state.strategies.by_id.len()),
-        format!(
-            "orders                {}",
-            state.orders.by_correlation_id.len()
-        ),
-        format!("positions             {}", state.positions.by_key.len()),
-        format!("open_alerts           {}", state.alerts.open_count()),
+        kv("fps", &state.connection.render_fps.to_string()),
+        kv("strategies", &state.strategies.by_id.len().to_string()),
+        kv("orders", &state.orders.by_correlation_id.len().to_string()),
+        kv("positions", &state.positions.by_key.len().to_string()),
+        kv("alerts", &state.alerts.open_count().to_string()),
     ];
     frame.render_widget(panel("System", system), sections[1]);
 
     let risk = vec![
-        format!("global_state          {}", state.risk.global_state),
-        format!(
-            "kill_switch_active    {}",
-            mark(!state.risk.kill_switch_active)
-        ),
-        format!(
-            "market_data_fresh     {}",
-            mark(state.risk.market_data_fresh)
-        ),
-        format!(
-            "broker_order_channel  {}",
-            mark(state.risk.broker_order_channel_ok)
-        ),
-        format!(
-            "day_max_loss_ok       {}",
-            mark(!state.risk.day_max_loss_breached)
-        ),
-        format!(
-            "quote_staleness_ok    {}",
-            mark(state.risk.quote_staleness_ok)
-        ),
-        format!("short_permission      {}", state.account.short_permission),
-        format!(
-            "short_blocks_today    {}",
-            state.account.short_intents_blocked_today
+        kv("state", &state.risk.global_state),
+        kv("kill_ok", mark(!state.risk.kill_switch_active)),
+        kv("md_fresh", mark(state.risk.market_data_fresh)),
+        kv("orders_ok", mark(state.risk.broker_order_channel_ok)),
+        kv("loss_ok", mark(!state.risk.day_max_loss_breached)),
+        kv("quote_ok", mark(state.risk.quote_staleness_ok)),
+        kv("short_ok", &state.account.short_permission.to_string()),
+        kv(
+            "short_blk",
+            &state.account.short_intents_blocked_today.to_string(),
         ),
     ];
     frame.render_widget(panel("Risk", risk), sections[2]);
@@ -282,35 +261,20 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .split(area);
 
     let mut global = vec![
-        format!(
-            "account_connected           {}",
-            mark(state.account.broker_connected)
-        ),
-        format!(
-            "market_data_fresh           {}",
-            mark(state.risk.market_data_fresh)
-        ),
-        format!(
-            "broker_order_channel_ok      {}",
-            mark(state.risk.broker_order_channel_ok)
-        ),
-        format!(
-            "day_max_loss_not_breached    {}",
-            mark(!state.risk.day_max_loss_breached)
-        ),
-        format!(
-            "quote_staleness_ok          {}",
-            mark(state.risk.quote_staleness_ok)
-        ),
-        format!(
-            "short_permission            {}",
-            state.account.short_permission
+        kv_wide("account_connected", mark(state.account.broker_connected)),
+        kv_wide("market_data_fresh", mark(state.risk.market_data_fresh)),
+        kv_wide("order_channel_ok", mark(state.risk.broker_order_channel_ok)),
+        kv_wide("day_loss_ok", mark(!state.risk.day_max_loss_breached)),
+        kv_wide("quote_stale_ok", mark(state.risk.quote_staleness_ok)),
+        kv_wide(
+            "short_permission",
+            &state.account.short_permission.to_string(),
         ),
         String::new(),
         "LIMITS".to_string(),
     ];
     for (key, value) in &state.risk.limits {
-        global.push(format!("{:<30} {}", key, value));
+        global.push(kv_wide(key, value));
     }
     frame.render_widget(panel("Global Risk", global), sections[0]);
 
@@ -432,4 +396,12 @@ fn truncate(value: &str, max_chars: usize) -> String {
         output.push(ch);
     }
     output
+}
+
+fn kv(label: &str, value: &str) -> String {
+    format!("{:<11} {}", truncate(label, 11), value)
+}
+
+fn kv_wide(label: &str, value: &str) -> String {
+    format!("{:<21} {}", truncate(label, 21), value)
 }
