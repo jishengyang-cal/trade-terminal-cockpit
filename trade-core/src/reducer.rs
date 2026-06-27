@@ -1,8 +1,8 @@
 use crate::events::{
-    AlertAcknowledged, AlertRaised, BrokerAckReceived, CancelRequested, CommandAuditRecorded,
-    DomainEvent, EventEnvelope, IntentCreated, OrderCancelled, OrderFill, OrderRejected,
-    OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade, RiskLimitBreached,
-    StrategyHeartbeat, StrategyStateChanged,
+    AlertAcknowledged, AlertRaised, BrokerAckReceived, CancelRejected, CancelRequested,
+    CommandAuditRecorded, DomainEvent, EventEnvelope, IntentCreated, OrderCancelled, OrderFill,
+    OrderRejected, OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade,
+    RiskLimitBreached, SignalGenerated, StrategyHeartbeat, StrategyStateChanged,
 };
 use crate::state::{
     AlertView, AppState, EventSummary, OrderLifecycleState, PositionView, RiskBlock,
@@ -22,6 +22,9 @@ pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
         }
         DomainEvent::StrategyStateChanged(event) => {
             reduce_strategy_state_changed(state, sequence, event);
+        }
+        DomainEvent::SignalGenerated(event) => {
+            reduce_signal_generated(state, sequence, publish_ts_ns, event);
         }
         DomainEvent::IntentCreated(event) => {
             reduce_intent_created(state, sequence, publish_ts_ns, event);
@@ -46,6 +49,9 @@ pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
         }
         DomainEvent::CancelRequested(event) => {
             reduce_cancel_requested(state, sequence, publish_ts_ns, event);
+        }
+        DomainEvent::CancelRejected(event) => {
+            reduce_cancel_rejected(state, sequence, publish_ts_ns, event);
         }
         DomainEvent::OrderCancelled(event) => {
             reduce_order_cancelled(state, sequence, publish_ts_ns, event);
@@ -75,6 +81,35 @@ fn reduce_strategy_state_changed(state: &mut AppState, sequence: u64, event: Str
     strategy.mode = event.mode;
     strategy.last_reason = Some(event.reason);
     strategy.last_event_sequence = Some(sequence);
+}
+
+fn reduce_signal_generated(
+    state: &mut AppState,
+    sequence: u64,
+    publish_ts_ns: i64,
+    event: SignalGenerated,
+) {
+    let strategy = state.strategies.get_or_insert(&event.strategy_id);
+    strategy.signals += 1;
+    strategy.last_event_sequence = Some(sequence);
+
+    let score = event
+        .score
+        .map(|score| format!(" score={score:.4}"))
+        .unwrap_or_default();
+    let chain = state.orders.get_or_insert_chain(&event.correlation_id);
+    chain.strategy_id = Some(event.strategy_id);
+    chain.symbol = Some(event.symbol.clone());
+    chain.state = OrderLifecycleState::SignalGenerated;
+    chain.push_timeline(
+        sequence,
+        publish_ts_ns,
+        "SIGNAL",
+        format!(
+            "{} {}{} reason={}",
+            event.symbol, event.signal_name, score, event.reason
+        ),
+    );
 }
 
 fn reduce_intent_created(
@@ -283,6 +318,22 @@ fn reduce_cancel_requested(
         .index_order(&event.account_id, &event.order_id, &event.correlation_id);
 }
 
+fn reduce_cancel_rejected(
+    state: &mut AppState,
+    sequence: u64,
+    publish_ts_ns: i64,
+    event: CancelRejected,
+) {
+    let chain = state.orders.get_or_insert_chain(&event.correlation_id);
+    chain.account_id = Some(event.account_id.clone());
+    chain.order_id = Some(event.order_id.clone());
+    chain.state = OrderLifecycleState::CancelRejected;
+    chain.push_timeline(sequence, publish_ts_ns, "CANCEL_REJECT", event.reason);
+    state
+        .orders
+        .index_order(&event.account_id, &event.order_id, &event.correlation_id);
+}
+
 fn reduce_order_cancelled(
     state: &mut AppState,
     sequence: u64,
@@ -416,6 +467,16 @@ fn headline(event: &DomainEvent) -> String {
                 event.strategy_id, event.state, event.reason
             )
         }
+        DomainEvent::SignalGenerated(event) => {
+            let score = event
+                .score
+                .map(|score| format!(" score={score:.4}"))
+                .unwrap_or_default();
+            format!(
+                "{} {} {}{}",
+                event.strategy_id, event.symbol, event.signal_name, score
+            )
+        }
         DomainEvent::IntentCreated(event) => format!(
             "{} {} {} {}",
             event.strategy_id, event.side, event.quantity, event.symbol
@@ -443,6 +504,7 @@ fn headline(event: &DomainEvent) -> String {
             format!("fill {} @ {:.4}", event.filled_quantity, event.fill_price)
         }
         DomainEvent::CancelRequested(event) => format!("cancel requested {}", event.order_id),
+        DomainEvent::CancelRejected(event) => format!("cancel rejected {}", event.reason),
         DomainEvent::OrderCancelled(event) => format!("cancelled {}", event.order_id),
         DomainEvent::OrderRejected(event) => format!("rejected {}", event.reason),
         DomainEvent::PositionSnapshot(event) => {

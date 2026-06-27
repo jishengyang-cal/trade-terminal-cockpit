@@ -54,6 +54,9 @@ Development expectations:
 - Local workstation work is limited to light file inspection, editing,
   formatting that does not trigger compilation, git operations, and
   non-compiling policy checks.
+- Update `Cargo.lock` on the Google VM when dependency changes are required,
+  and keep the lockfile compatible with the repository `rust-version` unless the
+  toolchain policy is explicitly changed.
 - Before publishing changes, validate on the Google VM with
   `cargo fmt --all -- --check`, `cargo test --workspace`, and
   `tools/smoke_check.sh`.

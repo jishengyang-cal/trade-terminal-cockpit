@@ -233,6 +233,7 @@ impl OrderChain {
 pub enum OrderLifecycleState {
     #[default]
     Observed,
+    SignalGenerated,
     IntentCreated,
     RiskPending,
     RiskRejected,
@@ -243,6 +244,7 @@ pub enum OrderLifecycleState {
     PartiallyFilled,
     Filled,
     CancelRequested,
+    CancelRejected,
     Cancelled,
     BrokerRejected,
 }

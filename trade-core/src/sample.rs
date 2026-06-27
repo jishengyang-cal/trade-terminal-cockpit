@@ -1,7 +1,7 @@
 use crate::events::{
     AlertRaised, BrokerAckReceived, DomainEvent, EventEnvelope, IntentCreated, OrderFill,
-    OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade, StrategyHeartbeat,
-    StrategyPositionAttribution,
+    OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade, SignalGenerated,
+    StrategyHeartbeat, StrategyPositionAttribution,
 };
 
 pub fn sample_events() -> Vec<EventEnvelope> {
@@ -25,6 +25,14 @@ pub fn sample_events() -> Vec<EventEnvelope> {
             state: "RUN".to_string(),
             mode: "PAPER".to_string(),
             heartbeat_lag_ms: 83,
+        })),
+        next(DomainEvent::SignalGenerated(SignalGenerated {
+            correlation_id: correlation_id.to_string(),
+            strategy_id: "open-scalp".to_string(),
+            symbol: "MU".to_string(),
+            signal_name: "gap_continuation".to_string(),
+            score: Some(0.82),
+            reason: "open-window".to_string(),
         })),
         next(DomainEvent::IntentCreated(IntentCreated {
             correlation_id: correlation_id.to_string(),

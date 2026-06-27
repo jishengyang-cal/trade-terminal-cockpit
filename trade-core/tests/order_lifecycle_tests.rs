@@ -1,5 +1,6 @@
 use trade_core::events::{
-    DomainEvent, EventEnvelope, IntentCreated, PositionSnapshot, RiskDecisionMade,
+    CancelRejected, CancelRequested, DomainEvent, EventEnvelope, IntentCreated,
+    OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade, SignalGenerated,
     StrategyPositionAttribution,
 };
 use trade_core::state::OrderLifecycleState;
@@ -24,7 +25,11 @@ fn reconstructs_order_lifecycle_from_event_sequence() {
     assert_eq!(chain.symbol.as_deref(), Some("MU"));
     assert_eq!(chain.filled_quantity, 100);
     assert!((chain.average_fill_price.unwrap() - 123.456).abs() < 0.0001);
-    assert_eq!(chain.timeline.len(), 7);
+    assert_eq!(chain.timeline.len(), 8);
+    assert_eq!(chain.timeline[0].kind, "SIGNAL");
+
+    let strategy = state.strategies.by_id.get("open-scalp").unwrap();
+    assert_eq!(strategy.signals, 1);
 
     let position = state
         .positions
@@ -83,6 +88,128 @@ fn risk_rejection_blocks_chain_before_submit() {
     assert_eq!(chain.order_id, None);
     assert_eq!(state.account.short_intents_blocked_today, 1);
     assert_eq!(state.risk.active_blocks.len(), 1);
+}
+
+#[test]
+fn cancel_rejection_is_retained_in_order_lifecycle() {
+    let mut state = AppState::default();
+    let correlation_id = "corr-cancel-reject";
+    let account_id = "paper-main";
+    let order_id = "ord-cancel-reject";
+    let events = vec![
+        EventEnvelope::new(
+            "evt-cancel-reject-001",
+            correlation_id,
+            1,
+            "test",
+            DomainEvent::SignalGenerated(SignalGenerated {
+                correlation_id: correlation_id.to_string(),
+                strategy_id: "open-scalp".to_string(),
+                symbol: "MU".to_string(),
+                signal_name: "gap_continuation".to_string(),
+                score: Some(0.82),
+                reason: "open-window".to_string(),
+            }),
+        ),
+        EventEnvelope::new(
+            "evt-cancel-reject-002",
+            correlation_id,
+            2,
+            "test",
+            DomainEvent::IntentCreated(IntentCreated {
+                correlation_id: correlation_id.to_string(),
+                strategy_id: "open-scalp".to_string(),
+                symbol: "MU".to_string(),
+                side: "BUY".to_string(),
+                quantity: 100,
+                reason: "open-window".to_string(),
+            }),
+        ),
+        EventEnvelope::new(
+            "evt-cancel-reject-003",
+            correlation_id,
+            3,
+            "test",
+            DomainEvent::RiskDecisionMade(RiskDecisionMade {
+                correlation_id: correlation_id.to_string(),
+                strategy_id: "open-scalp".to_string(),
+                symbol: "MU".to_string(),
+                approved: true,
+                reason_codes: vec!["quote_fresh=17ms".to_string()],
+            }),
+        ),
+        EventEnvelope::new(
+            "evt-cancel-reject-004",
+            correlation_id,
+            4,
+            "test",
+            DomainEvent::OrderSubmitRequested(OrderSubmitRequested {
+                correlation_id: correlation_id.to_string(),
+                account_id: account_id.to_string(),
+                order_id: order_id.to_string(),
+                order_type: "LMT".to_string(),
+                limit_price: Some(123.45),
+                tif: "DAY".to_string(),
+            }),
+        ),
+        EventEnvelope::new(
+            "evt-cancel-reject-005",
+            correlation_id,
+            5,
+            "test",
+            DomainEvent::OrderSubmitted(OrderSubmitted {
+                correlation_id: correlation_id.to_string(),
+                account_id: account_id.to_string(),
+                order_id: order_id.to_string(),
+                broker: "BROKER_SIM".to_string(),
+            }),
+        ),
+        EventEnvelope::new(
+            "evt-cancel-reject-006",
+            correlation_id,
+            6,
+            "test",
+            DomainEvent::CancelRequested(CancelRequested {
+                correlation_id: correlation_id.to_string(),
+                account_id: account_id.to_string(),
+                order_id: order_id.to_string(),
+                reason: "operator requested cancel".to_string(),
+            }),
+        ),
+        EventEnvelope::new(
+            "evt-cancel-reject-007",
+            correlation_id,
+            7,
+            "test",
+            DomainEvent::CancelRejected(CancelRejected {
+                correlation_id: correlation_id.to_string(),
+                account_id: account_id.to_string(),
+                order_id: order_id.to_string(),
+                reason: "broker already filling".to_string(),
+            }),
+        ),
+    ];
+
+    for event in events {
+        reduce_event(&mut state, event);
+    }
+
+    let chain = state
+        .orders
+        .by_correlation_id
+        .get(correlation_id)
+        .expect("cancel-rejected chain should be retained for evidence");
+
+    assert_eq!(chain.state, OrderLifecycleState::CancelRejected);
+    assert_eq!(chain.order_id.as_deref(), Some(order_id));
+    assert_eq!(
+        state
+            .orders
+            .order_id_index
+            .get("paper-main:ord-cancel-reject"),
+        Some(&correlation_id.to_string())
+    );
+    assert_eq!(chain.timeline.last().unwrap().kind, "CANCEL_REJECT");
 }
 
 #[test]

@@ -52,6 +52,7 @@ impl EventEnvelope {
 pub enum DomainEvent {
     StrategyHeartbeat(StrategyHeartbeat),
     StrategyStateChanged(StrategyStateChanged),
+    SignalGenerated(SignalGenerated),
     IntentCreated(IntentCreated),
     RiskDecisionMade(RiskDecisionMade),
     OrderSubmitRequested(OrderSubmitRequested),
@@ -60,6 +61,7 @@ pub enum DomainEvent {
     OrderPartiallyFilled(OrderFill),
     OrderFilled(OrderFill),
     CancelRequested(CancelRequested),
+    CancelRejected(CancelRejected),
     OrderCancelled(OrderCancelled),
     OrderRejected(OrderRejected),
     PositionSnapshot(PositionSnapshot),
@@ -74,6 +76,7 @@ impl DomainEvent {
         match self {
             Self::StrategyHeartbeat(_) => "StrategyHeartbeat",
             Self::StrategyStateChanged(_) => "StrategyStateChanged",
+            Self::SignalGenerated(_) => "SignalGenerated",
             Self::IntentCreated(_) => "IntentCreated",
             Self::RiskDecisionMade(_) => "RiskDecisionMade",
             Self::OrderSubmitRequested(_) => "OrderSubmitRequested",
@@ -82,6 +85,7 @@ impl DomainEvent {
             Self::OrderPartiallyFilled(_) => "OrderPartiallyFilled",
             Self::OrderFilled(_) => "OrderFilled",
             Self::CancelRequested(_) => "CancelRequested",
+            Self::CancelRejected(_) => "CancelRejected",
             Self::OrderCancelled(_) => "OrderCancelled",
             Self::OrderRejected(_) => "OrderRejected",
             Self::PositionSnapshot(_) => "PositionSnapshot",
@@ -95,7 +99,8 @@ impl DomainEvent {
     pub fn aggregate_type(&self) -> &'static str {
         match self {
             Self::StrategyHeartbeat(_) | Self::StrategyStateChanged(_) => "strategy",
-            Self::IntentCreated(_)
+            Self::SignalGenerated(_)
+            | Self::IntentCreated(_)
             | Self::RiskDecisionMade(_)
             | Self::OrderSubmitRequested(_)
             | Self::OrderSubmitted(_)
@@ -103,6 +108,7 @@ impl DomainEvent {
             | Self::OrderPartiallyFilled(_)
             | Self::OrderFilled(_)
             | Self::CancelRequested(_)
+            | Self::CancelRejected(_)
             | Self::OrderCancelled(_)
             | Self::OrderRejected(_) => "order_chain",
             Self::PositionSnapshot(_) => "position",
@@ -116,6 +122,7 @@ impl DomainEvent {
         match self {
             Self::StrategyHeartbeat(event) => event.strategy_id.clone(),
             Self::StrategyStateChanged(event) => event.strategy_id.clone(),
+            Self::SignalGenerated(event) => event.correlation_id.clone(),
             Self::IntentCreated(event) => event.correlation_id.clone(),
             Self::RiskDecisionMade(event) => event.correlation_id.clone(),
             Self::OrderSubmitRequested(event) => event.correlation_id.clone(),
@@ -125,6 +132,7 @@ impl DomainEvent {
                 event.correlation_id.clone()
             }
             Self::CancelRequested(event) => event.correlation_id.clone(),
+            Self::CancelRejected(event) => event.correlation_id.clone(),
             Self::OrderCancelled(event) => event.correlation_id.clone(),
             Self::OrderRejected(event) => event.correlation_id.clone(),
             Self::PositionSnapshot(event) => format!("{}:{}", event.account_id, event.symbol),
@@ -149,6 +157,16 @@ pub struct StrategyStateChanged {
     pub strategy_id: String,
     pub state: String,
     pub mode: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SignalGenerated {
+    pub correlation_id: String,
+    pub strategy_id: String,
+    pub symbol: String,
+    pub signal_name: String,
+    pub score: Option<f64>,
     pub reason: String,
 }
 
@@ -209,6 +227,14 @@ pub struct OrderFill {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CancelRequested {
+    pub correlation_id: String,
+    pub account_id: String,
+    pub order_id: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CancelRejected {
     pub correlation_id: String,
     pub account_id: String,
     pub order_id: String,

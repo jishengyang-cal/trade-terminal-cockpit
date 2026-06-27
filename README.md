@@ -54,7 +54,7 @@ terminal UI itself, reached through a tailnet SSH session:
 tools/tailnet_cockpit_url.sh
 ```
 
-After connecting to the printed SSH URI, run:
+After connecting to the printed SSH URI, run this from a Google VM checkout:
 
 ```bash
 cargo run -p trade-tui -- --mock
@@ -62,13 +62,17 @@ cargo run -p trade-tui -- --mock
 
 ## Development
 
+Run Rust builds, tests, and smoke checks on the Google VM, not on the local
+workstation. Local work should stay limited to inspection, edits, and git
+operations.
+
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
 tools/smoke_check.sh
 ```
 
-Useful local checks:
+Useful VM checks:
 
 ```bash
 cargo run -p trade-tui -- --plain

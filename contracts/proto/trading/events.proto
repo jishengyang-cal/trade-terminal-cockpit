@@ -34,6 +34,15 @@ message StrategyStateChanged {
   string reason = 4;
 }
 
+message SignalGenerated {
+  string correlation_id = 1;
+  string strategy_id = 2;
+  string symbol = 3;
+  string signal_name = 4;
+  optional double score = 5;
+  string reason = 6;
+}
+
 message IntentCreated {
   string correlation_id = 1;
   string strategy_id = 2;
@@ -84,6 +93,13 @@ message OrderFill {
 }
 
 message CancelRequested {
+  string correlation_id = 1;
+  string account_id = 2;
+  string order_id = 3;
+  string reason = 4;
+}
+
+message CancelRejected {
   string correlation_id = 1;
   string account_id = 2;
   string order_id = 3;
