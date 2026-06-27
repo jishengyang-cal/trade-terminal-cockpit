@@ -5,35 +5,40 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
-use trade_core::EventEnvelope;
+use trade_core::{EventEnvelope, EventFilter};
 
-pub fn load_events(cli: &Cli) -> Result<Vec<EventEnvelope>> {
-    if cli.mock || cli.event_jsonl.is_none() {
-        return Ok(trade_core::sample::sample_events());
-    }
-
-    let path = cli.event_jsonl.as_ref().expect("checked above");
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("failed to read event jsonl {}", path.display()))?;
-    let mut events = Vec::new();
-    for (index, line) in content.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+pub fn load_events(cli: &Cli, filter: &EventFilter) -> Result<Vec<EventEnvelope>> {
+    let events = if cli.mock || cli.event_jsonl.is_none() {
+        trade_core::sample::sample_events()
+    } else {
+        let path = cli.event_jsonl.as_ref().expect("checked above");
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read event jsonl {}", path.display()))?;
+        let mut events = Vec::new();
+        for (index, line) in content.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let event = serde_json::from_str::<EventEnvelope>(line).with_context(|| {
+                format!(
+                    "failed to decode event jsonl line {} from {}",
+                    index + 1,
+                    path.display()
+                )
+            })?;
+            events.push(event);
         }
-        let event = serde_json::from_str::<EventEnvelope>(line).with_context(|| {
-            format!(
-                "failed to decode event jsonl line {} from {}",
-                index + 1,
-                path.display()
-            )
-        })?;
-        events.push(event);
-    }
-    Ok(events)
+        events
+    };
+
+    Ok(events
+        .into_iter()
+        .filter(|event| filter.matches(event))
+        .collect())
 }
 
-pub fn spawn_follow(cli: &Cli) -> Result<Option<Receiver<EventEnvelope>>> {
+pub fn spawn_follow(cli: &Cli, filter: EventFilter) -> Result<Option<Receiver<EventEnvelope>>> {
     if !cli.follow || cli.plain {
         return Ok(None);
     }
@@ -77,6 +82,9 @@ pub fn spawn_follow(cli: &Cli) -> Result<Option<Receiver<EventEnvelope>>> {
                             }
                             match serde_json::from_str::<EventEnvelope>(line) {
                                 Ok(event) => {
+                                    if !filter.matches(&event) {
+                                        continue;
+                                    }
                                     if tx.send(event).is_err() {
                                         return;
                                     }

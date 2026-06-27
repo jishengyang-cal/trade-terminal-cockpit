@@ -1,11 +1,13 @@
 pub mod commands;
 pub mod events;
+pub mod filter;
 pub mod reducer;
 pub mod sample;
 pub mod state;
 
 pub use commands::{CommandEnvelope, CommandPayload, DangerLevel};
 pub use events::{DomainEvent, EventEnvelope};
+pub use filter::EventFilter;
 pub use reducer::reduce_event;
 pub use state::AppState;
 

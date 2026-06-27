@@ -19,7 +19,9 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let events = event_stream::load_events(&cli)?;
+    let filter = cli.event_filter()?;
+    let filter_summary = filter.summary();
+    let events = event_stream::load_events(&cli, &filter)?;
     let mut state = AppState::default();
     state.connection.nats = if cli.replay {
         "replay".to_string()
@@ -34,12 +36,15 @@ fn main() -> Result<()> {
         reduce_event(&mut state, event);
     }
 
-    let event_rx = event_stream::spawn_follow(&cli)?;
+    let event_rx = event_stream::spawn_follow(&cli, filter)?;
 
     if cli.plain {
-        println!("{}", render::plain_summary(&state, cli.replay));
+        println!(
+            "{}",
+            render::plain_summary(&state, cli.replay, filter_summary.as_deref())
+        );
         return Ok(());
     }
 
-    app::run(state, cli, event_rx)
+    app::run(state, cli, filter_summary, event_rx)
 }

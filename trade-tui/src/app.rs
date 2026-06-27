@@ -13,8 +13,13 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 use trade_core::{reduce_event, AppState, EventEnvelope};
 
-pub fn run(state: AppState, cli: Cli, event_rx: Option<Receiver<EventEnvelope>>) -> Result<()> {
-    let mut app = App::new(state, cli, event_rx);
+pub fn run(
+    state: AppState,
+    cli: Cli,
+    filter_summary: Option<String>,
+    event_rx: Option<Receiver<EventEnvelope>>,
+) -> Result<()> {
+    let mut app = App::new(state, cli, filter_summary, event_rx);
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -36,12 +41,18 @@ pub struct App {
     pub replay: bool,
     pub replay_from: Option<String>,
     pub replay_to: Option<String>,
+    pub filter_summary: Option<String>,
     pub should_quit: bool,
     event_rx: Option<Receiver<EventEnvelope>>,
 }
 
 impl App {
-    pub fn new(state: AppState, cli: Cli, event_rx: Option<Receiver<EventEnvelope>>) -> Self {
+    pub fn new(
+        state: AppState,
+        cli: Cli,
+        filter_summary: Option<String>,
+        event_rx: Option<Receiver<EventEnvelope>>,
+    ) -> Self {
         Self {
             state,
             screen: if cli.replay {
@@ -52,6 +63,7 @@ impl App {
             replay: cli.replay,
             replay_from: cli.from,
             replay_to: cli.to,
+            filter_summary,
             should_quit: false,
             event_rx,
         }

@@ -78,6 +78,12 @@ Useful VM checks:
 cargo run -p trade-tui -- --plain
 cargo run -p trade-tui -- --plain --replay --from 2026-06-25T09:30:00 --to 2026-06-25T10:00:00
 cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --follow
+cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --replay \
+  --from 2026-06-25T09:30:00 \
+  --to 2026-06-25T10:00:00 \
+  --strategy-id open-scalp \
+  --symbol MU \
+  --correlation-id corr-demo-001
 cargo run -p tradectl -- \
   --operator-id operator-demo \
   --session-id session-demo \

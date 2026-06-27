@@ -6,8 +6,8 @@ use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 use trade_core::state::{AppState, OrderChain};
 
-pub fn plain_summary(state: &AppState, replay: bool) -> String {
-    format!(
+pub fn plain_summary(state: &AppState, replay: bool, filter_summary: Option<&str>) -> String {
+    let mut summary = format!(
         "mode={} account={} risk={} strategies={} orders={} positions={} open_alerts={} last_seq={}",
         if replay { "REPLAY" } else { "READ_ONLY" },
         state.account.account_id,
@@ -21,7 +21,13 @@ pub fn plain_summary(state: &AppState, replay: bool) -> String {
             .last_event_sequence
             .map(|seq| seq.to_string())
             .unwrap_or_else(|| "-".to_string())
-    )
+    );
+    if let Some(filter_summary) = filter_summary {
+        summary.push_str(" filter=\"");
+        summary.push_str(filter_summary);
+        summary.push('"');
+    }
+    summary
 }
 
 pub fn render(frame: &mut Frame<'_>, app: &App) {
@@ -359,6 +365,10 @@ fn render_replay(frame: &mut Frame<'_>, area: Rect, app: &App) {
         format!(
             "orders_rebuilt         {}",
             app.state.orders.by_correlation_id.len()
+        ),
+        format!(
+            "active_filter          {}",
+            app.filter_summary.as_deref().unwrap_or("-")
         ),
     ];
     frame.render_widget(panel("Replay", lines), area);
