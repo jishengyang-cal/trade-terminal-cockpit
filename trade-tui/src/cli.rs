@@ -8,6 +8,9 @@ use trade_core::EventFilter;
 #[command(about = "Read-only trading domain terminal cockpit")]
 pub struct Cli {
     #[arg(long, value_name = "PATH")]
+    pub snapshot_json: Option<PathBuf>,
+
+    #[arg(long, value_name = "PATH")]
     pub event_jsonl: Option<PathBuf>,
 
     #[arg(long)]

@@ -1,0 +1,113 @@
+{
+  "schema_version": "trading.projections.v1",
+  "snapshot_ts_ns": 41000,
+  "source": "state-projectiond-json",
+  "last_event_sequence": 41,
+  "account": {
+    "account_id": "paper-snapshot",
+    "mode": "PAPER",
+    "broker": "BROKER_SIM",
+    "broker_connected": true,
+    "cash": 10000.0,
+    "buying_power": 20000.0,
+    "day_pnl": 12.34,
+    "realized_pnl": 0.0,
+    "unrealized_pnl": 12.34,
+    "exposure_pct": 5.0,
+    "margin_usage_pct": 1.0,
+    "short_permission": false,
+    "short_intents_blocked_today": 2
+  },
+  "strategies": [
+    {
+      "strategy_id": "open-scalp",
+      "state": "RUN",
+      "mode": "PAPER",
+      "universe_count": 80,
+      "signals": 120,
+      "intents": 4,
+      "orders": 1,
+      "pnl": 12.34,
+      "heartbeat_lag_ms": 83,
+      "last_event_sequence": 41,
+      "last_reason": null
+    }
+  ],
+  "orders": [
+    {
+      "correlation_id": "corr-snapshot-001",
+      "strategy_id": "open-scalp",
+      "account_id": "paper-snapshot",
+      "symbol": "MU",
+      "side": "BUY",
+      "intended_quantity": 100,
+      "state": "partially_filled",
+      "order_id": "ord-snapshot-001",
+      "broker": "BROKER_SIM",
+      "broker_order_id": "9182",
+      "broker_status": "PreSubmitted",
+      "order_type": "LMT",
+      "limit_price": 123.45,
+      "tif": "DAY",
+      "risk": {
+        "approved": true,
+        "reason_codes": ["quote_fresh=17ms", "max_loss_ok"]
+      },
+      "filled_quantity": 50,
+      "average_fill_price": 123.45,
+      "timeline": [
+        {
+          "sequence": 41,
+          "ts_ns": 41000,
+          "kind": "PARTIAL_FILL",
+          "summary": "50 @ 123.4500"
+        }
+      ]
+    }
+  ],
+  "positions": [
+    {
+      "key": "paper-snapshot:MU",
+      "account_id": "paper-snapshot",
+      "symbol": "MU",
+      "net_quantity": 50,
+      "average_price": 123.45,
+      "market_price": 123.70,
+      "unrealized_pnl": 12.50,
+      "strategy_attribution": [
+        {
+          "strategy_id": "open-scalp",
+          "quantity": 50
+        }
+      ]
+    }
+  ],
+  "risk": {
+    "global_state": "NORMAL",
+    "kill_switch_active": false,
+    "market_data_fresh": true,
+    "broker_order_channel_ok": true,
+    "day_max_loss_breached": false,
+    "quote_staleness_ok": true,
+    "short_permission": false,
+    "limits": {
+      "day_max_loss_pct": "1.00%",
+      "max_order_notional": "1500",
+      "max_position_notional": "3000",
+      "max_trades_per_symbol_day": "3",
+      "strategy_max_consecutive_stop": "3"
+    },
+    "active_blocks": []
+  },
+  "alerts": [
+    {
+      "alert_id": "alert-snapshot-001",
+      "severity": "WARN",
+      "domain": "market-data",
+      "message": "quote stale MU 120ms",
+      "acknowledged": false,
+      "acknowledged_by": null,
+      "acknowledge_reason": null
+    }
+  ]
+}

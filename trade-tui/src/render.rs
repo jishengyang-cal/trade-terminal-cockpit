@@ -64,15 +64,13 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         state.account.mode.as_str()
     };
     let status = format!(
-        " ACCOUNT: {} | MODE: {} | RISK: {} | PNL: {:+.2} | EXPOSURE: {:.1}% | NATS: {} | CMD: {} | LAG: {}ms ",
-        state.account.account_id,
-        mode,
-        state.risk.global_state,
+        " ACCT:{} | {} | {} | PNL:{:+.2} | EXP:{:.1}% | SRC:{} ",
+        truncate(&state.account.account_id, 14),
+        truncate(mode, 6),
+        truncate(&state.risk.global_state, 10),
         state.account.day_pnl,
         state.account.exposure_pct,
-        state.connection.nats,
-        state.connection.command_gateway,
-        state.connection.event_lag_ms,
+        truncate(&state.connection.nats, 8),
     );
     frame.render_widget(
         Paragraph::new(status).style(Style::default().bg(Color::Black).fg(Color::Green)),

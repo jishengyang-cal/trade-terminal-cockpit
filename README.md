@@ -41,6 +41,7 @@ trade-core/       event, command, reducer, and view-state types
 trade-tui/        Ratatui/Crossterm read-only terminal cockpit
 tradectl/         non-interactive command-envelope emitter
 contracts/proto/  language-neutral trading contracts
+fixtures/         sanitized projection/event fixtures for local cockpit checks
 .ai/              construction governance profiles and hooks
 tools/            local boundary and smoke checks
 ```
@@ -53,6 +54,7 @@ deployment target for the trading frontend.
 
 ```bash
 tools/open_local_tui.sh --mock
+tools/open_local_tui.sh --snapshot-json fixtures/projection_snapshot.json
 ```
 
 `tools/open_local_tui.sh` does not run `cargo` and does not SSH anywhere. It
@@ -93,6 +95,7 @@ Useful VM checks:
 
 ```bash
 cargo run -p trade-tui -- --plain
+cargo run -p trade-tui -- --plain --snapshot-json fixtures/projection_snapshot.json
 cargo run -p trade-tui -- --plain --replay --from 2026-06-25T09:30:00 --to 2026-06-25T10:00:00
 cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --follow
 cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --replay \

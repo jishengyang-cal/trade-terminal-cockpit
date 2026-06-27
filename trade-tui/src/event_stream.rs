@@ -8,8 +8,10 @@ use std::time::Duration;
 use trade_core::{EventEnvelope, EventFilter};
 
 pub fn load_events(cli: &Cli, filter: &EventFilter) -> Result<Vec<EventEnvelope>> {
-    let events = if cli.mock || cli.event_jsonl.is_none() {
+    let events = if cli.mock || (cli.event_jsonl.is_none() && cli.snapshot_json.is_none()) {
         trade_core::sample::sample_events()
+    } else if cli.event_jsonl.is_none() {
+        Vec::new()
     } else {
         let path = cli.event_jsonl.as_ref().expect("checked above");
         let content = fs::read_to_string(path)

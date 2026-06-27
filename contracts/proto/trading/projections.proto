@@ -82,6 +82,29 @@ message RiskSnapshot {
   repeated RiskBlock active_blocks = 8;
 }
 
+message AlertProjection {
+  string alert_id = 1;
+  string severity = 2;
+  string domain = 3;
+  string message = 4;
+  bool acknowledged = 5;
+  string acknowledged_by = 6;
+  string acknowledge_reason = 7;
+}
+
+message TerminalProjectionSnapshot {
+  string schema_version = 1;
+  int64 snapshot_ts_ns = 2;
+  string source = 3;
+  optional uint64 last_event_sequence = 4;
+  OverviewSnapshot account = 5;
+  repeated StrategySnapshot strategies = 6;
+  repeated OrderTimeline orders = 7;
+  repeated PositionProjection positions = 8;
+  RiskSnapshot risk = 9;
+  repeated AlertProjection alerts = 10;
+}
+
 message EventFilter {
   string strategy_id = 1;
   string symbol = 2;
