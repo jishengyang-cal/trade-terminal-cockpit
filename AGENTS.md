@@ -48,5 +48,12 @@ Development expectations:
 - Keep rendering code independent from transport code.
 - Keep dangerous actions replayable through `tradectl` and auditable through
   command envelopes.
-- Run `cargo fmt --all -- --check`, `cargo test --workspace`, and
-  `tools/smoke_check.sh` before publishing changes.
+- Do not run Rust compilation, tests, `cargo run`, or smoke checks on the local
+  workstation. Run build-heavy commands such as `cargo check`, `cargo test`,
+  `cargo build`, `cargo run`, and `tools/smoke_check.sh` on the Google VM.
+- Local workstation work is limited to light file inspection, editing,
+  formatting that does not trigger compilation, git operations, and
+  non-compiling policy checks.
+- Before publishing changes, validate on the Google VM with
+  `cargo fmt --all -- --check`, `cargo test --workspace`, and
+  `tools/smoke_check.sh`.
