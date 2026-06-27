@@ -1,6 +1,10 @@
 use crate::cli::Cli;
 use anyhow::{Context, Result};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::Duration;
 use trade_core::EventEnvelope;
 
 pub fn load_events(cli: &Cli) -> Result<Vec<EventEnvelope>> {
@@ -27,4 +31,73 @@ pub fn load_events(cli: &Cli) -> Result<Vec<EventEnvelope>> {
         events.push(event);
     }
     Ok(events)
+}
+
+pub fn spawn_follow(cli: &Cli) -> Result<Option<Receiver<EventEnvelope>>> {
+    if !cli.follow || cli.plain {
+        return Ok(None);
+    }
+
+    let path = cli
+        .event_jsonl
+        .clone()
+        .expect("clap requires --event-jsonl when --follow is used");
+    let poll = Duration::from_millis(cli.follow_poll_ms.max(10));
+    let (tx, rx) = mpsc::channel();
+
+    thread::Builder::new()
+        .name("event-jsonl-follow".to_string())
+        .spawn(move || {
+            let mut line_number = 0_u64;
+            loop {
+                let file = match File::open(&path) {
+                    Ok(file) => file,
+                    Err(error) => {
+                        eprintln!("trade-tui follow: failed to open {}: {error}", path.display());
+                        thread::sleep(poll);
+                        continue;
+                    }
+                };
+                let mut reader = BufReader::new(file);
+                if let Err(error) = reader.seek(SeekFrom::End(0)) {
+                    eprintln!("trade-tui follow: failed to seek {}: {error}", path.display());
+                    thread::sleep(poll);
+                    continue;
+                }
+
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => thread::sleep(poll),
+                        Ok(_) => {
+                            line_number += 1;
+                            let line = line.trim();
+                            if line.is_empty() {
+                                continue;
+                            }
+                            match serde_json::from_str::<EventEnvelope>(line) {
+                                Ok(event) => {
+                                    if tx.send(event).is_err() {
+                                        return;
+                                    }
+                                }
+                                Err(error) => eprintln!(
+                                    "trade-tui follow: failed to decode appended line {} from {}: {error}",
+                                    line_number,
+                                    path.display()
+                                ),
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("trade-tui follow: read error from {}: {error}", path.display());
+                            thread::sleep(poll);
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+        .context("failed to spawn event jsonl follow thread")?;
+
+    Ok(Some(rx))
 }

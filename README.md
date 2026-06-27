@@ -45,6 +45,21 @@ contracts/proto/  language-neutral trading contracts
 tools/            local boundary and smoke checks
 ```
 
+## Tailnet Access
+
+This repo intentionally has no HTTP frontend address. The frontend is the
+terminal UI itself, reached through a tailnet SSH session:
+
+```bash
+tools/tailnet_cockpit_url.sh
+```
+
+After connecting to the printed SSH URI, run:
+
+```bash
+cargo run -p trade-tui -- --mock
+```
+
 ## Development
 
 ```bash
@@ -58,6 +73,7 @@ Useful local checks:
 ```bash
 cargo run -p trade-tui -- --plain
 cargo run -p trade-tui -- --plain --replay --from 2026-06-25T09:30:00 --to 2026-06-25T10:00:00
+cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --follow
 cargo run -p tradectl -- \
   --operator-id operator-demo \
   --session-id session-demo \

@@ -8,6 +8,7 @@ cargo check --workspace
 cargo test --workspace
 cargo run -p trade-tui -- --plain | grep -q 'mode=READ_ONLY'
 cargo run -p trade-tui -- --plain --replay --from 2026-06-25T09:30:00 --to 2026-06-25T10:00:00 | grep -q 'mode=REPLAY'
+cargo run -p trade-tui -- --help | grep -q -- '--follow'
 cargo run -p tradectl -- \
   --operator-id smoke-operator \
   --session-id smoke-session \

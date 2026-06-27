@@ -9,11 +9,12 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
-use trade_core::AppState;
+use trade_core::{reduce_event, AppState, EventEnvelope};
 
-pub fn run(state: AppState, cli: Cli) -> Result<()> {
-    let mut app = App::new(state, cli);
+pub fn run(state: AppState, cli: Cli, event_rx: Option<Receiver<EventEnvelope>>) -> Result<()> {
+    let mut app = App::new(state, cli, event_rx);
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -29,7 +30,6 @@ pub fn run(state: AppState, cli: Cli) -> Result<()> {
     result
 }
 
-#[derive(Clone, Debug)]
 pub struct App {
     pub state: AppState,
     pub screen: Screen,
@@ -37,10 +37,11 @@ pub struct App {
     pub replay_from: Option<String>,
     pub replay_to: Option<String>,
     pub should_quit: bool,
+    event_rx: Option<Receiver<EventEnvelope>>,
 }
 
 impl App {
-    pub fn new(state: AppState, cli: Cli) -> Self {
+    pub fn new(state: AppState, cli: Cli, event_rx: Option<Receiver<EventEnvelope>>) -> Self {
         Self {
             state,
             screen: if cli.replay {
@@ -52,6 +53,7 @@ impl App {
             replay_from: cli.from,
             replay_to: cli.to,
             should_quit: false,
+            event_rx,
         }
     }
 
@@ -60,6 +62,7 @@ impl App {
         let tick_rate = Duration::from_millis((1000 / fps).max(10));
 
         while !self.should_quit {
+            self.drain_events();
             terminal.draw(|frame| render::render(frame, self))?;
             if event::poll(tick_rate)? {
                 if let event::Event::Key(key) = event::read()? {
@@ -69,6 +72,14 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn drain_events(&mut self) {
+        if let Some(rx) = &self.event_rx {
+            while let Ok(event) = rx.try_recv() {
+                reduce_event(&mut self.state, event);
+            }
+        }
     }
 
     pub fn next_screen(&mut self) {

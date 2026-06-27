@@ -14,6 +14,12 @@ pub struct Cli {
     #[arg(long)]
     pub plain: bool,
 
+    #[arg(long, requires = "event_jsonl")]
+    pub follow: bool,
+
+    #[arg(long, default_value_t = 250)]
+    pub follow_poll_ms: u64,
+
     #[arg(long)]
     pub replay: bool,
 

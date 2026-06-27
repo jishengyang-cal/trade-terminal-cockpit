@@ -34,10 +34,12 @@ fn main() -> Result<()> {
         reduce_event(&mut state, event);
     }
 
+    let event_rx = event_stream::spawn_follow(&cli)?;
+
     if cli.plain {
         println!("{}", render::plain_summary(&state, cli.replay));
         return Ok(());
     }
 
-    app::run(state, cli)
+    app::run(state, cli, event_rx)
 }
