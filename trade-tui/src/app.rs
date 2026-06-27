@@ -42,6 +42,8 @@ pub struct App {
     pub replay_from: Option<String>,
     pub replay_to: Option<String>,
     pub filter_summary: Option<String>,
+    pub selected_order_index: usize,
+    pub selected_event_index: usize,
     pub should_quit: bool,
     event_rx: Option<Receiver<EventEnvelope>>,
 }
@@ -64,6 +66,8 @@ impl App {
             replay_from: cli.from,
             replay_to: cli.to,
             filter_summary,
+            selected_order_index: 0,
+            selected_event_index: 0,
             should_quit: false,
             event_rx,
         }
@@ -100,6 +104,40 @@ impl App {
 
     pub fn previous_screen(&mut self) {
         self.screen = self.screen.previous();
+    }
+
+    pub fn select_next(&mut self) {
+        match self.screen {
+            Screen::Orders => {
+                let len = self.state.orders.by_correlation_id.len();
+                self.selected_order_index = next_index(self.selected_order_index, len);
+            }
+            Screen::Events => {
+                let len = self.state.audit.events.len().min(200);
+                self.selected_event_index = next_index(self.selected_event_index, len);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn select_previous(&mut self) {
+        match self.screen {
+            Screen::Orders => {
+                self.selected_order_index = self.selected_order_index.saturating_sub(1);
+            }
+            Screen::Events => {
+                self.selected_event_index = self.selected_event_index.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn next_index(current: usize, len: usize) -> usize {
+    if len == 0 {
+        0
+    } else {
+        (current + 1).min(len - 1)
     }
 }
 

@@ -69,6 +69,17 @@ tools/verify_on_google_vm.sh --copy-binaries
 tools/open_local_tui.sh --mock
 ```
 
+Useful cockpit keys:
+
+```text
+F2-F8       switch cockpit screens
+Tab         next screen
+Shift-Tab   previous screen
+Up/Down     select order chain or event row
+j/k         select order chain or event row
+q           exit
+```
+
 ## Tailnet Access
 
 Tailnet access is auxiliary remote-operator documentation only. It is not the

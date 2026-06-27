@@ -15,6 +15,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Tab => app.next_screen(),
         KeyCode::BackTab => app.previous_screen(),
+        KeyCode::Down | KeyCode::Char('j') => app.select_next(),
+        KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
         KeyCode::F(key) => {
             if let Some(screen) = Screen::from_function_key(key) {
                 app.screen = screen;

@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
-use trade_core::state::{AppState, OrderChain};
+use trade_core::state::{AppState, EventSummary, OrderChain};
 
 pub fn plain_summary(state: &AppState, replay: bool, filter_summary: Option<&str>) -> String {
     let mut summary = format!(
@@ -47,10 +47,10 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     match app.screen {
         Screen::Overview => render_overview(frame, chunks[2], &app.state),
         Screen::Strategies => render_strategies(frame, chunks[2], &app.state),
-        Screen::Orders => render_orders(frame, chunks[2], &app.state),
+        Screen::Orders => render_orders(frame, chunks[2], app),
         Screen::Positions => render_positions(frame, chunks[2], &app.state),
         Screen::Risk => render_risk(frame, chunks[2], &app.state),
-        Screen::Events => render_events(frame, chunks[2], &app.state),
+        Screen::Events => render_events(frame, chunks[2], app),
         Screen::Replay => render_replay(frame, chunks[2], app),
     }
     render_footer(frame, chunks[3], app);
@@ -183,27 +183,33 @@ fn render_strategies(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_widget(panel("Strategies", lines), area);
 }
 
-fn render_orders(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let state = &app.state;
     let sections = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
         .split(area);
 
     let mut rows = vec![format!(
-        "{:<17} {:<10} {:<7} {:<6} {:>8} {:<16}",
-        "CORRELATION", "STATE", "SYMBOL", "SIDE", "FILLED", "ORDER_ID"
+        "  {:<12} {:<7} {:<4} {:>4}",
+        "CORR", "STATE", "SYM", "FILL"
     )];
-    for chain in state.orders.by_correlation_id.values() {
-        rows.push(format_order_row(chain));
+    for (index, chain) in state.orders.by_correlation_id.values().enumerate() {
+        rows.push(format_order_row(chain, index == app.selected_order_index));
     }
     frame.render_widget(panel("Order Chains", rows), sections[0]);
 
-    let timeline = latest_chain(state)
+    let timeline = selected_chain(state, app.selected_order_index)
         .map(|chain| {
-            let mut lines = vec![format!(
-                "correlation_id={} state={:?}",
-                chain.correlation_id, chain.state
-            )];
+            let mut lines = vec![
+                kv_wide("correlation_id", &chain.correlation_id),
+                kv_wide("state", &format!("{:?}", chain.state)),
+                kv_wide("order_id", chain.order_id.as_deref().unwrap_or("-")),
+                kv_wide("symbol", chain.symbol.as_deref().unwrap_or("-")),
+                kv_wide("side", chain.side.as_deref().unwrap_or("-")),
+                kv_wide("filled_qty", &chain.filled_quantity.to_string()),
+                String::new(),
+            ];
             for entry in &chain.timeline {
                 lines.push(format!(
                     "#{:<4} {:<13} {}",
@@ -290,25 +296,40 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_widget(panel("Active Blocks", blocks), sections[1]);
 }
 
-fn render_events(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+fn render_events(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let state = &app.state;
+    let sections = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(area);
+
     let lines = state
         .audit
         .events
         .iter()
         .rev()
         .take(200)
-        .map(|event| {
-            format!(
-                "#{:<4} {:<22} {:<12} corr={} {}",
-                event.sequence,
-                truncate(&event.event_type, 22),
-                truncate(&event.aggregate_type, 12),
-                truncate(&event.correlation_id, 16),
-                event.headline
-            )
-        })
+        .enumerate()
+        .map(|(index, event)| format_event_row(event, index == app.selected_event_index))
         .collect::<Vec<_>>();
-    frame.render_widget(panel("Events / Audit", lines), area);
+    frame.render_widget(panel("Events / Audit", lines), sections[0]);
+
+    let detail = selected_event(state, app.selected_event_index)
+        .map(|event| {
+            vec![
+                kv_wide("sequence", &event.sequence.to_string()),
+                kv_wide("event_type", &event.event_type),
+                kv_wide("aggregate_type", &event.aggregate_type),
+                kv_wide("aggregate_id", &event.aggregate_id),
+                kv_wide("correlation_id", &event.correlation_id),
+                kv_wide("producer", &event.producer),
+                kv_wide("publish_ts_ns", &event.ts_ns.to_string()),
+                String::new(),
+                event.headline.clone(),
+            ]
+        })
+        .unwrap_or_else(|| vec!["no events".to_string()]);
+    frame.render_widget(panel("Event Detail", detail), sections[1]);
 }
 
 fn render_replay(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -337,10 +358,17 @@ fn render_replay(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let text = if app.replay {
-        " REPLAY: no live commands | q exits "
-    } else {
-        " READ ONLY: command execution is externalized through tradectl/command-gateway | q exits "
+    let text = match app.screen {
+        Screen::Orders | Screen::Events if app.replay => {
+            " REPLAY: no live commands | up/down or j/k select | q exits "
+        }
+        Screen::Orders | Screen::Events => {
+            " READ ONLY: up/down or j/k select | commands are externalized through tradectl | q exits "
+        }
+        _ if app.replay => " REPLAY: no live commands | q exits ",
+        _ => {
+            " READ ONLY: command execution is externalized through tradectl/command-gateway | q exits "
+        }
     };
     frame.render_widget(
         Paragraph::new(text).style(Style::default().bg(Color::Black).fg(Color::Gray)),
@@ -355,25 +383,34 @@ fn panel(title: &'static str, lines: Vec<String>) -> Paragraph<'static> {
         .wrap(Wrap { trim: false })
 }
 
-fn latest_chain(state: &AppState) -> Option<&OrderChain> {
-    state.orders.by_correlation_id.values().max_by_key(|chain| {
-        chain
-            .timeline
-            .last()
-            .map(|entry| entry.sequence)
-            .unwrap_or(0)
-    })
+fn selected_chain(state: &AppState, selected_index: usize) -> Option<&OrderChain> {
+    state.orders.by_correlation_id.values().nth(selected_index)
 }
 
-fn format_order_row(chain: &OrderChain) -> String {
+fn selected_event(state: &AppState, selected_index: usize) -> Option<&EventSummary> {
+    state.audit.events.iter().rev().nth(selected_index)
+}
+
+fn format_order_row(chain: &OrderChain, selected: bool) -> String {
     format!(
-        "{:<17} {:<10} {:<7} {:<6} {:>8} {:<16}",
-        truncate(&chain.correlation_id, 17),
-        truncate(&format!("{:?}", chain.state), 10),
-        truncate(chain.symbol.as_deref().unwrap_or("-"), 7),
-        truncate(chain.side.as_deref().unwrap_or("-"), 6),
+        "{} {:<12} {:<7} {:<4} {:>4}",
+        if selected { ">" } else { " " },
+        truncate(&chain.correlation_id, 12),
+        truncate(&format!("{:?}", chain.state), 7),
+        truncate(chain.symbol.as_deref().unwrap_or("-"), 4),
         chain.filled_quantity,
-        truncate(chain.order_id.as_deref().unwrap_or("-"), 16),
+    )
+}
+
+fn format_event_row(event: &EventSummary, selected: bool) -> String {
+    format!(
+        "{} #{:<4} {:<22} {:<12} corr={} {}",
+        if selected { ">" } else { " " },
+        event.sequence,
+        truncate(&event.event_type, 22),
+        truncate(&event.aggregate_type, 12),
+        truncate(&event.correlation_id, 14),
+        event.headline
     )
 }
 
