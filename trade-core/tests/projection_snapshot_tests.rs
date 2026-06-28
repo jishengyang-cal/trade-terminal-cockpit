@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use trade_core::events::{DomainEvent, EventEnvelope, OrderFill};
 use trade_core::state::{
     AccountView, AlertView, AppState, OrderChain, OrderLifecycleState, PositionView, RiskView,
@@ -100,31 +99,7 @@ fn sample_snapshot() -> ProjectionSnapshot {
             ..AccountView::new("paper-main")
         }),
         accounts: Vec::new(),
-        strategies: vec![StrategyView {
-            strategy_id: "open-scalp".to_string(),
-            state: "RUN".to_string(),
-            mode: "PAPER".to_string(),
-            universe_count: 80,
-            signals: 120,
-            intents: 4,
-            orders: 1,
-            pnl: 12.34,
-            heartbeat_lag_ms: Some(83),
-            last_event_sequence: Some(41),
-            last_reason: None,
-            last_signal_sequence: Some(37),
-            last_intent_sequence: Some(38),
-            last_order_sequence: Some(39),
-            parameters: BTreeMap::from([
-                ("cooldown_ms".to_string(), "800".to_string()),
-                ("imbalance_threshold".to_string(), "0.73".to_string()),
-            ]),
-            risk_gates: vec![StrategyRiskGateView {
-                name: "quote_freshness".to_string(),
-                passed: true,
-                detail: "83ms".to_string(),
-            }],
-        }],
+        strategies: vec![sample_strategy()],
         orders: vec![chain],
         positions: vec![PositionView {
             key: "paper-main:MU".to_string(),
@@ -150,4 +125,32 @@ fn sample_snapshot() -> ProjectionSnapshot {
             acknowledge_reason: None,
         }],
     }
+}
+
+fn sample_strategy() -> StrategyView {
+    let mut strategy = StrategyView::new("open-scalp");
+    strategy.state = "RUN".to_string();
+    strategy.mode = "PAPER".to_string();
+    strategy.universe_count = 80;
+    strategy.signals = 120;
+    strategy.intents = 4;
+    strategy.orders = 1;
+    strategy.pnl = 12.34;
+    strategy.heartbeat_lag_ms = Some(83);
+    strategy.last_event_sequence = Some(41);
+    strategy.last_signal_sequence = Some(37);
+    strategy.last_intent_sequence = Some(38);
+    strategy.last_order_sequence = Some(39);
+    strategy
+        .parameters
+        .insert("cooldown_ms".to_string(), "800".to_string());
+    strategy
+        .parameters
+        .insert("imbalance_threshold".to_string(), "0.73".to_string());
+    strategy.risk_gates = vec![StrategyRiskGateView {
+        name: "quote_freshness".to_string(),
+        passed: true,
+        detail: "83ms".to_string(),
+    }];
+    strategy
 }

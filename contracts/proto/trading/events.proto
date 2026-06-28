@@ -31,11 +31,75 @@ message EventEnvelope {
   string checksum = 24;
 }
 
+message AccountSnapshot {
+  string account_id = 1;
+  string mode = 2;
+  string broker = 3;
+  optional bool broker_connected = 4;
+  string account_currency = 5;
+  Money cash = 6;
+  Money buying_power = 7;
+  Money day_pnl = 8;
+  Money realized_pnl = 9;
+  Money unrealized_pnl = 10;
+  Money net_liquidation = 11;
+  Money equity_with_loan = 12;
+  Money initial_margin = 13;
+  Money maintenance_margin = 14;
+  Money excess_liquidity = 15;
+  Money available_funds = 16;
+  Money sma = 17;
+  optional int32 day_trades_remaining = 18;
+  string pdt_status = 19;
+  string trading_restriction = 20;
+  Money settled_cash = 21;
+  Money unsettled_cash = 22;
+  Money gross_exposure = 23;
+  Money net_exposure = 24;
+  Money long_market_value = 25;
+  Money short_market_value = 26;
+  optional double exposure_pct = 27;
+  optional double margin_usage_pct = 28;
+  optional bool short_permission = 29;
+  optional uint64 short_intents_blocked_today = 30;
+}
+
 message StrategyHeartbeat {
   string strategy_id = 1;
   StrategyState state = 2;
   AccountMode mode = 3;
   uint64 heartbeat_lag_ms = 4;
+}
+
+message StrategyRiskGateProjection {
+  string name = 1;
+  bool passed = 2;
+  string detail = 3;
+}
+
+message StrategyHealthUpdated {
+  string strategy_id = 1;
+  optional bool enabled = 2;
+  string trading_window = 3;
+  string current_phase = 4;
+  string universe_version = 5;
+  optional uint64 universe_count = 6;
+  optional uint64 active_symbol_count = 7;
+  optional uint64 watched_symbol_count = 8;
+  optional uint64 l2_allocated_symbol_count = 9;
+  optional double signal_rate_1m = 10;
+  optional double reject_rate_1m = 11;
+  optional double fill_rate_1m = 12;
+  optional double cancel_rate_1m = 13;
+  optional uint64 avg_intent_to_submit_ms = 14;
+  optional uint64 avg_submit_to_ack_ms = 15;
+  optional uint64 avg_ack_to_fill_ms = 16;
+  optional uint64 consecutive_stops = 17;
+  optional uint64 trades_today = 18;
+  optional uint64 max_trades_today = 19;
+  optional double daily_loss_used_pct = 20;
+  map<string, string> parameters = 21;
+  repeated StrategyRiskGateProjection risk_gates = 22;
 }
 
 message StrategyStateChanged {
@@ -260,6 +324,36 @@ message AlertAcknowledged {
   string alert_id = 1;
   string operator_id = 2;
   string reason = 3;
+}
+
+message IngestDiagnosticRecorded {
+  string source = 1;
+  string stream = 2;
+  string consumer = 3;
+  string subject = 4;
+  string severity = 5;
+  string message = 6;
+  string error_kind = 7;
+  bool reconnect = 8;
+  bool decode_error = 9;
+  uint64 filtered_count = 10;
+  uint64 acked_count = 11;
+}
+
+message CommandAuthorityDecided {
+  string decision_id = 1;
+  string command_id = 2;
+  string status = 3;
+  repeated string reason_codes = 4;
+  repeated string matched_policy_ids = 5;
+  string operator_id = 6;
+  string command_type = 7;
+  string capability = 8;
+  string scope = 9;
+  repeated string approved_by = 10;
+  int64 decided_ts_ns = 11;
+  string authority_policy_version = 12;
+  string target_environment = 13;
 }
 
 message CommandAuditRecorded {

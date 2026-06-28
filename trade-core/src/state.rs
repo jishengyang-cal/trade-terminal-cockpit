@@ -9,6 +9,8 @@ pub struct AppState {
     pub account: AccountView,
     #[serde(default)]
     pub accounts: AccountStore,
+    #[serde(default)]
+    pub commands: CommandStore,
     pub strategies: StrategyStore,
     pub orders: OrderStore,
     pub positions: PositionStore,
@@ -27,6 +29,7 @@ impl Default for AppState {
             connection: ConnectionState::default(),
             account: AccountView::default(),
             accounts: AccountStore::default(),
+            commands: CommandStore::default(),
             strategies: StrategyStore::default(),
             orders: OrderStore::default(),
             positions: PositionStore::default(),
@@ -85,6 +88,24 @@ pub struct ConnectionState {
     pub last_disconnect_ts_ns: Option<i64>,
     #[serde(default)]
     pub last_reconnect_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub ingest_errors: u64,
+    #[serde(default)]
+    pub decode_errors: u64,
+    #[serde(default)]
+    pub filtered_events: u64,
+    #[serde(default)]
+    pub jetstream_acks: u64,
+    #[serde(default)]
+    pub events_drained_last_tick: u64,
+    #[serde(default)]
+    pub max_drain_per_tick: u64,
+    #[serde(default)]
+    pub render_slow_frames: u64,
+    #[serde(default)]
+    pub last_render_duration_ms: u64,
+    #[serde(default)]
+    pub event_rx_backlog_estimate: Option<u64>,
 }
 
 impl Default for ConnectionState {
@@ -118,6 +139,15 @@ impl Default for ConnectionState {
             last_error: None,
             last_disconnect_ts_ns: None,
             last_reconnect_ts_ns: None,
+            ingest_errors: 0,
+            decode_errors: 0,
+            filtered_events: 0,
+            jetstream_acks: 0,
+            events_drained_last_tick: 0,
+            max_drain_per_tick: 5_000,
+            render_slow_frames: 0,
+            last_render_duration_ms: 0,
+            event_rx_backlog_estimate: None,
         }
     }
 }
@@ -129,10 +159,20 @@ pub struct AccountView {
     pub broker: String,
     pub broker_connected: bool,
     pub cash: f64,
+    #[serde(default)]
+    pub cash_value: Money,
     pub buying_power: f64,
+    #[serde(default)]
+    pub buying_power_value: Money,
     pub day_pnl: f64,
+    #[serde(default)]
+    pub day_pnl_value: Money,
     pub realized_pnl: f64,
+    #[serde(default)]
+    pub realized_pnl_value: Money,
     pub unrealized_pnl: f64,
+    #[serde(default)]
+    pub unrealized_pnl_value: Money,
     pub exposure_pct: f64,
     pub margin_usage_pct: f64,
     pub short_permission: bool,
@@ -189,10 +229,15 @@ impl AccountView {
             broker: "unknown".to_string(),
             broker_connected: false,
             cash: 0.0,
+            cash_value: Money::default(),
             buying_power: 0.0,
+            buying_power_value: Money::default(),
             day_pnl: 0.0,
+            day_pnl_value: Money::default(),
             realized_pnl: 0.0,
+            realized_pnl_value: Money::default(),
             unrealized_pnl: 0.0,
+            unrealized_pnl_value: Money::default(),
             exposure_pct: 0.0,
             margin_usage_pct: 0.0,
             short_permission: false,
@@ -216,6 +261,27 @@ impl AccountView {
             long_market_value: Money::default(),
             short_market_value: Money::default(),
         }
+    }
+
+    pub fn sync_legacy_money_from_f64(&mut self) {
+        let currency = if self.account_currency.is_empty() {
+            "USD".to_string()
+        } else {
+            self.account_currency.clone()
+        };
+        self.cash_value = Money::from_f64(self.cash, currency.clone());
+        self.buying_power_value = Money::from_f64(self.buying_power, currency.clone());
+        self.day_pnl_value = Money::from_f64(self.day_pnl, currency.clone());
+        self.realized_pnl_value = Money::from_f64(self.realized_pnl, currency.clone());
+        self.unrealized_pnl_value = Money::from_f64(self.unrealized_pnl, currency);
+    }
+
+    pub fn sync_legacy_f64_from_money(&mut self) {
+        self.cash = self.cash_value.as_f64();
+        self.buying_power = self.buying_power_value.as_f64();
+        self.day_pnl = self.day_pnl_value.as_f64();
+        self.realized_pnl = self.realized_pnl_value.as_f64();
+        self.unrealized_pnl = self.unrealized_pnl_value.as_f64();
     }
 }
 
@@ -278,22 +344,40 @@ impl AccountStore {
         aggregate.broker = "mixed".to_string();
         aggregate.broker_connected = self.by_id.values().all(|account| account.broker_connected);
         aggregate.cash = self.by_id.values().map(|account| account.cash).sum();
+        aggregate.cash_value = sum_money(self.by_id.values().map(|account| &account.cash_value));
         aggregate.buying_power = self
             .by_id
             .values()
             .map(|account| account.buying_power)
             .sum();
+        aggregate.buying_power_value = sum_money(
+            self.by_id
+                .values()
+                .map(|account| &account.buying_power_value),
+        );
         aggregate.day_pnl = self.by_id.values().map(|account| account.day_pnl).sum();
+        aggregate.day_pnl_value =
+            sum_money(self.by_id.values().map(|account| &account.day_pnl_value));
         aggregate.realized_pnl = self
             .by_id
             .values()
             .map(|account| account.realized_pnl)
             .sum();
+        aggregate.realized_pnl_value = sum_money(
+            self.by_id
+                .values()
+                .map(|account| &account.realized_pnl_value),
+        );
         aggregate.unrealized_pnl = self
             .by_id
             .values()
             .map(|account| account.unrealized_pnl)
             .sum();
+        aggregate.unrealized_pnl_value = sum_money(
+            self.by_id
+                .values()
+                .map(|account| &account.unrealized_pnl_value),
+        );
         aggregate.exposure_pct = self
             .by_id
             .values()
@@ -326,7 +410,173 @@ impl AccountStore {
             .by_id
             .values()
             .any(|account| account.runtime_controls.cancel_all);
+        aggregate.account_currency =
+            common_currency(self.by_id.values()).unwrap_or_else(|| "MIXED".to_string());
+        aggregate.net_liquidation =
+            sum_money(self.by_id.values().map(|account| &account.net_liquidation));
+        aggregate.equity_with_loan =
+            sum_money(self.by_id.values().map(|account| &account.equity_with_loan));
+        aggregate.initial_margin =
+            sum_money(self.by_id.values().map(|account| &account.initial_margin));
+        aggregate.maintenance_margin = sum_money(
+            self.by_id
+                .values()
+                .map(|account| &account.maintenance_margin),
+        );
+        aggregate.excess_liquidity =
+            sum_money(self.by_id.values().map(|account| &account.excess_liquidity));
+        aggregate.available_funds =
+            sum_money(self.by_id.values().map(|account| &account.available_funds));
+        aggregate.sma = sum_optional_money(self.by_id.values().map(|account| account.sma.as_ref()));
+        aggregate.settled_cash = sum_optional_money(
+            self.by_id
+                .values()
+                .map(|account| account.settled_cash.as_ref()),
+        );
+        aggregate.unsettled_cash = sum_optional_money(
+            self.by_id
+                .values()
+                .map(|account| account.unsettled_cash.as_ref()),
+        );
+        aggregate.gross_exposure =
+            sum_money(self.by_id.values().map(|account| &account.gross_exposure));
+        aggregate.net_exposure =
+            sum_money(self.by_id.values().map(|account| &account.net_exposure));
+        aggregate.long_market_value = sum_money(
+            self.by_id
+                .values()
+                .map(|account| &account.long_market_value),
+        );
+        aggregate.short_market_value = sum_money(
+            self.by_id
+                .values()
+                .map(|account| &account.short_market_value),
+        );
+        aggregate.day_trades_remaining = self
+            .by_id
+            .values()
+            .filter_map(|account| account.day_trades_remaining)
+            .min();
+        aggregate.pdt_status = if self
+            .by_id
+            .values()
+            .any(|account| account.pdt_status.as_deref() == Some("restricted"))
+        {
+            Some("restricted".to_string())
+        } else {
+            None
+        };
+        let trading_restriction = self
+            .by_id
+            .values()
+            .filter_map(|account| account.trading_restriction.clone())
+            .collect::<Vec<_>>()
+            .join(",");
+        aggregate.trading_restriction = if trading_restriction.is_empty() {
+            None
+        } else {
+            Some(trading_restriction)
+        };
         aggregate
+    }
+}
+
+fn sum_money<'a>(values: impl IntoIterator<Item = &'a Money>) -> Money {
+    let mut total = Money::default();
+    let mut initialized = false;
+    for value in values {
+        if !initialized {
+            total = Money::new(0, value.scale, value.currency.clone());
+            initialized = true;
+        }
+        if value.scale == total.scale && value.currency == total.currency {
+            total.value += value.value;
+        } else {
+            total = Money::from_f64(total.as_f64() + value.as_f64(), total.currency.clone());
+        }
+    }
+    total
+}
+
+fn sum_optional_money<'a>(values: impl IntoIterator<Item = Option<&'a Money>>) -> Option<Money> {
+    let collected = values.into_iter().flatten().collect::<Vec<_>>();
+    if collected.is_empty() {
+        None
+    } else {
+        Some(sum_money(collected))
+    }
+}
+
+fn common_currency<'a>(accounts: impl IntoIterator<Item = &'a AccountView>) -> Option<String> {
+    let mut currency = None::<String>;
+    for account in accounts {
+        if account.account_currency.is_empty() {
+            continue;
+        }
+        match currency.as_deref() {
+            None => currency = Some(account.account_currency.clone()),
+            Some(existing) if existing == account.account_currency => {}
+            Some(_) => return None,
+        }
+    }
+    currency
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CommandStore {
+    pub by_id: BTreeMap<String, CommandEvidenceView>,
+}
+
+impl CommandStore {
+    pub fn get_or_insert(&mut self, command_id: &str) -> &mut CommandEvidenceView {
+        self.by_id
+            .entry(command_id.to_string())
+            .or_insert_with(|| CommandEvidenceView::new(command_id))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CommandEvidenceView {
+    pub command_id: String,
+    pub operator_id: Option<String>,
+    pub command_type: Option<String>,
+    pub aggregate_id: Option<String>,
+    pub audit_status: Option<String>,
+    pub audit_reason: Option<String>,
+    pub target: Option<String>,
+    pub authority_decision_id: Option<String>,
+    pub authority_status: Option<String>,
+    pub reason_codes: Vec<String>,
+    pub matched_policy_ids: Vec<String>,
+    pub capability: Option<String>,
+    pub scope: Option<String>,
+    pub approved_by: Vec<String>,
+    pub decided_ts_ns: Option<i64>,
+    pub authority_policy_version: Option<String>,
+    pub target_environment: Option<String>,
+}
+
+impl CommandEvidenceView {
+    pub fn new(command_id: &str) -> Self {
+        Self {
+            command_id: command_id.to_string(),
+            operator_id: None,
+            command_type: None,
+            aggregate_id: None,
+            audit_status: None,
+            audit_reason: None,
+            target: None,
+            authority_decision_id: None,
+            authority_status: None,
+            reason_codes: Vec::new(),
+            matched_policy_ids: Vec::new(),
+            capability: None,
+            scope: None,
+            approved_by: Vec::new(),
+            decided_ts_ns: None,
+            authority_policy_version: None,
+            target_environment: None,
+        }
     }
 }
 
@@ -366,6 +616,42 @@ pub struct StrategyView {
     pub parameters: BTreeMap<String, String>,
     #[serde(default)]
     pub risk_gates: Vec<StrategyRiskGateView>,
+    #[serde(default = "default_strategy_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub trading_window: Option<String>,
+    #[serde(default)]
+    pub current_phase: String,
+    #[serde(default)]
+    pub universe_version: Option<String>,
+    #[serde(default)]
+    pub active_symbol_count: u64,
+    #[serde(default)]
+    pub watched_symbol_count: u64,
+    #[serde(default)]
+    pub l2_allocated_symbol_count: u64,
+    #[serde(default)]
+    pub signal_rate_1m: f64,
+    #[serde(default)]
+    pub reject_rate_1m: f64,
+    #[serde(default)]
+    pub fill_rate_1m: f64,
+    #[serde(default)]
+    pub cancel_rate_1m: f64,
+    #[serde(default)]
+    pub avg_intent_to_submit_ms: Option<u64>,
+    #[serde(default)]
+    pub avg_submit_to_ack_ms: Option<u64>,
+    #[serde(default)]
+    pub avg_ack_to_fill_ms: Option<u64>,
+    #[serde(default)]
+    pub consecutive_stops: u64,
+    #[serde(default)]
+    pub trades_today: u64,
+    #[serde(default)]
+    pub max_trades_today: u64,
+    #[serde(default)]
+    pub daily_loss_used_pct: f64,
 }
 
 impl StrategyView {
@@ -387,8 +673,30 @@ impl StrategyView {
             last_order_sequence: None,
             parameters: BTreeMap::new(),
             risk_gates: Vec::new(),
+            enabled: true,
+            trading_window: None,
+            current_phase: "unknown".to_string(),
+            universe_version: None,
+            active_symbol_count: 0,
+            watched_symbol_count: 0,
+            l2_allocated_symbol_count: 0,
+            signal_rate_1m: 0.0,
+            reject_rate_1m: 0.0,
+            fill_rate_1m: 0.0,
+            cancel_rate_1m: 0.0,
+            avg_intent_to_submit_ms: None,
+            avg_submit_to_ack_ms: None,
+            avg_ack_to_fill_ms: None,
+            consecutive_stops: 0,
+            trades_today: 0,
+            max_trades_today: 0,
+            daily_loss_used_pct: 0.0,
         }
     }
+}
+
+fn default_strategy_enabled() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

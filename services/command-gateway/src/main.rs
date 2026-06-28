@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
-use trade_core::events::CommandAuditRecorded;
+use trade_core::events::{CommandAuditRecorded, CommandAuthorityDecided};
 use trade_core::{CommandEnvelope, CommandPayload, DangerLevel, DomainEvent, EventEnvelope};
 
 #[derive(Debug, Parser)]
@@ -41,13 +41,34 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let command = read_command(&cli.command_json)?;
-    let (status, reason) = decide(&command, cli.allow_dangerous, &cli.allow_capabilities)?;
-    let (status, reason) = if status == "accepted" && cli.execute_broker_control {
+    let decision = decide(&command, cli.allow_dangerous, &cli.allow_capabilities)?;
+    let authority_event = EventEnvelope::new(
+        format!("authority-{}", command.command_id),
+        command.correlation_id.clone(),
+        0,
+        "command-gateway",
+        DomainEvent::CommandAuthorityDecided(CommandAuthorityDecided {
+            decision_id: format!("decision-{}", command.command_id),
+            command_id: command.command_id.clone(),
+            status: decision.status.clone(),
+            reason_codes: decision.reason_codes.clone(),
+            matched_policy_ids: decision.matched_policy_ids.clone(),
+            operator_id: command.operator_id.clone(),
+            command_type: command.command_type.clone(),
+            capability: command.capability.clone(),
+            scope: command.aggregate_id.clone(),
+            approved_by: decision.approved_by.clone(),
+            decided_ts_ns: trade_core::unix_ts_ns(),
+            authority_policy_version: command.authority_policy_version.clone(),
+            target_environment: command.target_environment.clone(),
+        }),
+    );
+    let (status, reason) = if decision.status == "accepted" && cli.execute_broker_control {
         dispatch_broker_control(&command, &cli)?
     } else {
-        (status, reason)
+        (decision.status, decision.reason)
     };
-    let event = EventEnvelope::new(
+    let audit_event = EventEnvelope::new(
         format!("audit-{}", command.command_id),
         command.correlation_id.clone(),
         0,
@@ -67,8 +88,18 @@ fn main() -> Result<()> {
         .append(true)
         .open(&cli.audit_jsonl)
         .with_context(|| format!("failed to open {}", cli.audit_jsonl.display()))?;
-    writeln!(file, "{}", serde_json::to_string(&event)?)?;
+    writeln!(file, "{}", serde_json::to_string(&authority_event)?)?;
+    writeln!(file, "{}", serde_json::to_string(&audit_event)?)?;
     Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuthorityDecision {
+    status: String,
+    reason: String,
+    reason_codes: Vec<String>,
+    matched_policy_ids: Vec<String>,
+    approved_by: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -389,24 +420,51 @@ fn decide(
     command: &CommandEnvelope,
     allow_dangerous: bool,
     allow_capabilities: &[String],
-) -> Result<(String, String)> {
+) -> Result<AuthorityDecision> {
     if let Some(reason) = capability_rejection_reason(command, allow_capabilities) {
-        return Ok(("rejected".to_string(), reason));
+        return Ok(AuthorityDecision {
+            status: "rejected".to_string(),
+            reason: reason.clone(),
+            reason_codes: vec!["capability_rejected".to_string(), reason],
+            matched_policy_ids: vec!["capability.required".to_string()],
+            approved_by: Vec::new(),
+        });
     }
 
     match command.danger_level {
-        DangerLevel::ReadOnly | DangerLevel::Controlled => Ok((
-            "accepted".to_string(),
-            "gateway accepted envelope".to_string(),
-        )),
-        DangerLevel::Dangerous if allow_dangerous => Ok((
-            "accepted".to_string(),
-            "dangerous envelope accepted by explicit gateway flag".to_string(),
-        )),
-        DangerLevel::Dangerous => Ok((
-            "rejected".to_string(),
-            "dangerous envelope rejected by default authority policy".to_string(),
-        )),
+        DangerLevel::ReadOnly | DangerLevel::Controlled => Ok(AuthorityDecision {
+            status: "accepted".to_string(),
+            reason: "gateway accepted envelope".to_string(),
+            reason_codes: vec!["capability_ok".to_string(), "danger_level_ok".to_string()],
+            matched_policy_ids: vec![
+                "capability.required".to_string(),
+                "danger.controlled".to_string(),
+            ],
+            approved_by: vec!["command-gateway".to_string()],
+        }),
+        DangerLevel::Dangerous if allow_dangerous => Ok(AuthorityDecision {
+            status: "accepted".to_string(),
+            reason: "dangerous envelope accepted by explicit gateway flag".to_string(),
+            reason_codes: vec![
+                "capability_ok".to_string(),
+                "dangerous_explicitly_allowed".to_string(),
+            ],
+            matched_policy_ids: vec![
+                "capability.required".to_string(),
+                "danger.explicit_allow".to_string(),
+            ],
+            approved_by: vec!["command-gateway".to_string()],
+        }),
+        DangerLevel::Dangerous => Ok(AuthorityDecision {
+            status: "rejected".to_string(),
+            reason: "dangerous envelope rejected by default authority policy".to_string(),
+            reason_codes: vec!["dangerous_rejected_by_default".to_string()],
+            matched_policy_ids: vec![
+                "capability.required".to_string(),
+                "danger.default_reject".to_string(),
+            ],
+            approved_by: Vec::new(),
+        }),
     }
 }
 
@@ -614,9 +672,12 @@ mod tests {
             "account.kill",
         );
 
-        let (status, reason) = decide(&command, false, &[]).expect("decision should succeed");
+        let decision = decide(&command, false, &[]).expect("decision should succeed");
 
-        assert_eq!(status, "rejected");
-        assert!(reason.contains("dangerous envelope rejected"));
+        assert_eq!(decision.status, "rejected");
+        assert!(decision.reason.contains("dangerous envelope rejected"));
+        assert!(decision
+            .reason_codes
+            .contains(&"dangerous_rejected_by_default".to_string()));
     }
 }

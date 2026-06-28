@@ -1,5 +1,6 @@
 use crate::types::{Money, Price};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EventEnvelope {
@@ -84,7 +85,9 @@ impl EventEnvelope {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum DomainEvent {
+    AccountSnapshot(AccountSnapshot),
     StrategyHeartbeat(StrategyHeartbeat),
+    StrategyHealthUpdated(StrategyHealthUpdated),
     StrategyStateChanged(StrategyStateChanged),
     SignalGenerated(SignalGenerated),
     IntentCreated(IntentCreated),
@@ -102,13 +105,17 @@ pub enum DomainEvent {
     RiskLimitBreached(RiskLimitBreached),
     AlertRaised(AlertRaised),
     AlertAcknowledged(AlertAcknowledged),
+    IngestDiagnosticRecorded(IngestDiagnosticRecorded),
+    CommandAuthorityDecided(CommandAuthorityDecided),
     CommandAuditRecorded(CommandAuditRecorded),
 }
 
 impl DomainEvent {
     pub fn event_type(&self) -> &'static str {
         match self {
+            Self::AccountSnapshot(_) => "AccountSnapshot",
             Self::StrategyHeartbeat(_) => "StrategyHeartbeat",
+            Self::StrategyHealthUpdated(_) => "StrategyHealthUpdated",
             Self::StrategyStateChanged(_) => "StrategyStateChanged",
             Self::SignalGenerated(_) => "SignalGenerated",
             Self::IntentCreated(_) => "IntentCreated",
@@ -126,13 +133,18 @@ impl DomainEvent {
             Self::RiskLimitBreached(_) => "RiskLimitBreached",
             Self::AlertRaised(_) => "AlertRaised",
             Self::AlertAcknowledged(_) => "AlertAcknowledged",
+            Self::IngestDiagnosticRecorded(_) => "IngestDiagnosticRecorded",
+            Self::CommandAuthorityDecided(_) => "CommandAuthorityDecided",
             Self::CommandAuditRecorded(_) => "CommandAuditRecorded",
         }
     }
 
     pub fn aggregate_type(&self) -> &'static str {
         match self {
-            Self::StrategyHeartbeat(_) | Self::StrategyStateChanged(_) => "strategy",
+            Self::AccountSnapshot(_) => "account",
+            Self::StrategyHeartbeat(_)
+            | Self::StrategyHealthUpdated(_)
+            | Self::StrategyStateChanged(_) => "strategy",
             Self::SignalGenerated(_)
             | Self::IntentCreated(_)
             | Self::RiskDecisionMade(_)
@@ -148,13 +160,16 @@ impl DomainEvent {
             Self::PositionSnapshot(_) => "position",
             Self::RiskLimitBreached(_) => "risk",
             Self::AlertRaised(_) | Self::AlertAcknowledged(_) => "alert",
-            Self::CommandAuditRecorded(_) => "command",
+            Self::IngestDiagnosticRecorded(_) => "ingest",
+            Self::CommandAuthorityDecided(_) | Self::CommandAuditRecorded(_) => "command",
         }
     }
 
     pub fn aggregate_id(&self) -> String {
         match self {
+            Self::AccountSnapshot(event) => event.account_id.clone(),
             Self::StrategyHeartbeat(event) => event.strategy_id.clone(),
+            Self::StrategyHealthUpdated(event) => event.strategy_id.clone(),
             Self::StrategyStateChanged(event) => event.strategy_id.clone(),
             Self::SignalGenerated(event) => event.correlation_id.clone(),
             Self::IntentCreated(event) => event.correlation_id.clone(),
@@ -173,9 +188,78 @@ impl DomainEvent {
             Self::RiskLimitBreached(event) => event.scope.clone(),
             Self::AlertRaised(event) => event.alert_id.clone(),
             Self::AlertAcknowledged(event) => event.alert_id.clone(),
+            Self::IngestDiagnosticRecorded(event) => event
+                .subject
+                .clone()
+                .or_else(|| event.stream.clone())
+                .unwrap_or_else(|| event.source.clone()),
+            Self::CommandAuthorityDecided(event) => event.command_id.clone(),
             Self::CommandAuditRecorded(event) => event.command_id.clone(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountSnapshot {
+    pub account_id: String,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub broker: Option<String>,
+    #[serde(default)]
+    pub broker_connected: Option<bool>,
+    #[serde(default)]
+    pub account_currency: Option<String>,
+    #[serde(default)]
+    pub cash: Option<Money>,
+    #[serde(default)]
+    pub buying_power: Option<Money>,
+    #[serde(default)]
+    pub day_pnl: Option<Money>,
+    #[serde(default)]
+    pub realized_pnl: Option<Money>,
+    #[serde(default)]
+    pub unrealized_pnl: Option<Money>,
+    #[serde(default)]
+    pub net_liquidation: Option<Money>,
+    #[serde(default)]
+    pub equity_with_loan: Option<Money>,
+    #[serde(default)]
+    pub initial_margin: Option<Money>,
+    #[serde(default)]
+    pub maintenance_margin: Option<Money>,
+    #[serde(default)]
+    pub excess_liquidity: Option<Money>,
+    #[serde(default)]
+    pub available_funds: Option<Money>,
+    #[serde(default)]
+    pub sma: Option<Money>,
+    #[serde(default)]
+    pub day_trades_remaining: Option<i32>,
+    #[serde(default)]
+    pub pdt_status: Option<String>,
+    #[serde(default)]
+    pub trading_restriction: Option<String>,
+    #[serde(default)]
+    pub settled_cash: Option<Money>,
+    #[serde(default)]
+    pub unsettled_cash: Option<Money>,
+    #[serde(default)]
+    pub gross_exposure: Option<Money>,
+    #[serde(default)]
+    pub net_exposure: Option<Money>,
+    #[serde(default)]
+    pub long_market_value: Option<Money>,
+    #[serde(default)]
+    pub short_market_value: Option<Money>,
+    #[serde(default)]
+    pub exposure_pct: Option<f64>,
+    #[serde(default)]
+    pub margin_usage_pct: Option<f64>,
+    #[serde(default)]
+    pub short_permission: Option<bool>,
+    #[serde(default)]
+    pub short_intents_blocked_today: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -184,6 +268,60 @@ pub struct StrategyHeartbeat {
     pub state: String,
     pub mode: String,
     pub heartbeat_lag_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StrategyHealthUpdated {
+    pub strategy_id: String,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub trading_window: Option<String>,
+    #[serde(default)]
+    pub current_phase: Option<String>,
+    #[serde(default)]
+    pub universe_version: Option<String>,
+    #[serde(default)]
+    pub universe_count: Option<u64>,
+    #[serde(default)]
+    pub active_symbol_count: Option<u64>,
+    #[serde(default)]
+    pub watched_symbol_count: Option<u64>,
+    #[serde(default)]
+    pub l2_allocated_symbol_count: Option<u64>,
+    #[serde(default)]
+    pub signal_rate_1m: Option<f64>,
+    #[serde(default)]
+    pub reject_rate_1m: Option<f64>,
+    #[serde(default)]
+    pub fill_rate_1m: Option<f64>,
+    #[serde(default)]
+    pub cancel_rate_1m: Option<f64>,
+    #[serde(default)]
+    pub avg_intent_to_submit_ms: Option<u64>,
+    #[serde(default)]
+    pub avg_submit_to_ack_ms: Option<u64>,
+    #[serde(default)]
+    pub avg_ack_to_fill_ms: Option<u64>,
+    #[serde(default)]
+    pub consecutive_stops: Option<u64>,
+    #[serde(default)]
+    pub trades_today: Option<u64>,
+    #[serde(default)]
+    pub max_trades_today: Option<u64>,
+    #[serde(default)]
+    pub daily_loss_used_pct: Option<f64>,
+    #[serde(default)]
+    pub parameters: BTreeMap<String, String>,
+    #[serde(default)]
+    pub risk_gates: Vec<StrategyRiskGateProjection>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StrategyRiskGateProjection {
+    pub name: String,
+    pub passed: bool,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -540,6 +678,49 @@ pub struct AlertAcknowledged {
     pub alert_id: String,
     pub operator_id: String,
     pub reason: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct IngestDiagnosticRecorded {
+    pub source: String,
+    #[serde(default)]
+    pub stream: Option<String>,
+    #[serde(default)]
+    pub consumer: Option<String>,
+    #[serde(default)]
+    pub subject: Option<String>,
+    pub severity: String,
+    pub message: String,
+    #[serde(default)]
+    pub error_kind: Option<String>,
+    #[serde(default)]
+    pub reconnect: bool,
+    #[serde(default)]
+    pub decode_error: bool,
+    #[serde(default)]
+    pub filtered_count: u64,
+    #[serde(default)]
+    pub acked_count: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CommandAuthorityDecided {
+    pub decision_id: String,
+    pub command_id: String,
+    pub status: String,
+    pub reason_codes: Vec<String>,
+    pub matched_policy_ids: Vec<String>,
+    pub operator_id: String,
+    pub command_type: String,
+    pub capability: String,
+    pub scope: String,
+    #[serde(default)]
+    pub approved_by: Vec<String>,
+    pub decided_ts_ns: i64,
+    #[serde(default)]
+    pub authority_policy_version: String,
+    #[serde(default)]
+    pub target_environment: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

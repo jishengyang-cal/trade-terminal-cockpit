@@ -74,13 +74,14 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         selected_account.mode.as_str()
     };
     let status = format!(
-        " ACCTS:{} | SEL:{} | {} | RISK:{} | PNL:{:+.2} | EXP:{:.1}% | SRC:{} ",
+        " ACCTS:{} | SEL:{} | {} | RISK:{} | PNL:{:+.2} | EXP:{:.1}% | LAG:{}ms | SRC:{} ",
         state.accounts.len(),
         truncate(&selected_account_id(app), 14),
         truncate(mode, 6),
         truncate(&state.risk.global_state, 10),
         state.account.day_pnl,
         state.account.exposure_pct,
+        state.connection.event_lag_ms,
         truncate(&state.connection.nats, 8),
     );
     frame.render_widget(
@@ -139,19 +140,30 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
         kv("mode", &selected_account.mode),
         kv("broker", &selected_account.broker),
         kv("broker_ok", mark(selected_account.broker_connected)),
-        kv("cash", &format!("{:.2}", selected_account.cash)),
+        kv("cash", &selected_account.cash_value.to_string()),
         kv(
             "buy_power",
-            &format!("{:.2}", selected_account.buying_power),
+            &selected_account.buying_power_value.to_string(),
         ),
-        kv("day_pnl", &format!("{:+.2}", selected_account.day_pnl)),
-        kv(
-            "realized",
-            &format!("{:+.2}", selected_account.realized_pnl),
-        ),
+        kv("day_pnl", &selected_account.day_pnl_value.to_string()),
+        kv("realized", &selected_account.realized_pnl_value.to_string()),
         kv(
             "unrealized",
-            &format!("{:+.2}", selected_account.unrealized_pnl),
+            &selected_account.unrealized_pnl_value.to_string(),
+        ),
+        kv("net_liq", &selected_account.net_liquidation.to_string()),
+        kv("avail", &selected_account.available_funds.to_string()),
+        kv(
+            "maint_mgn",
+            &selected_account.maintenance_margin.to_string(),
+        ),
+        kv("pdt", selected_account.pdt_status.as_deref().unwrap_or("-")),
+        kv(
+            "day_trades",
+            &selected_account
+                .day_trades_remaining
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
         ),
         kv(
             "exposure",
@@ -178,8 +190,34 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .unwrap_or_else(|| "-".to_string()),
         ),
         kv("fps", &state.connection.render_fps.to_string()),
+        kv(
+            "render_ms",
+            &state.connection.last_render_duration_ms.to_string(),
+        ),
+        kv(
+            "slow_frames",
+            &state.connection.render_slow_frames.to_string(),
+        ),
+        kv(
+            "drained",
+            &state.connection.events_drained_last_tick.to_string(),
+        ),
+        kv(
+            "backlog",
+            &state
+                .connection
+                .event_rx_backlog_estimate
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
         kv("ingested", &state.connection.events_ingested.to_string()),
         kv("coalesced", &state.connection.events_coalesced.to_string()),
+        kv("dupes", &state.connection.duplicate_events.to_string()),
+        kv("gaps", &state.connection.sequence_gaps.to_string()),
+        kv("decode_err", &state.connection.decode_errors.to_string()),
+        kv("ingest_err", &state.connection.ingest_errors.to_string()),
+        kv("filtered", &state.connection.filtered_events.to_string()),
+        kv("js_acks", &state.connection.jetstream_acks.to_string()),
         kv(
             "retained",
             &state.connection.audit_events_retained.to_string(),
@@ -194,8 +232,13 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
         ),
         kv("strategies", &state.strategies.by_id.len().to_string()),
         kv("orders", &state.orders.by_correlation_id.len().to_string()),
+        kv("commands", &state.commands.by_id.len().to_string()),
         kv("positions", &state.positions.by_key.len().to_string()),
         kv("alerts", &state.alerts.open_count().to_string()),
+        kv(
+            "last_err",
+            state.connection.last_error.as_deref().unwrap_or("-"),
+        ),
     ];
     frame.render_widget(panel("System", system), sections[2]);
 }
@@ -475,11 +518,22 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let account = vec![
         kv_wide("account", &selected_account.account_id),
         kv_wide("broker_ok", mark(selected_account.broker_connected)),
-        kv_wide("day_pnl", &format!("{:+.2}", selected_account.day_pnl)),
+        kv_wide("net_liq", &selected_account.net_liquidation.to_string()),
+        kv_wide("available", &selected_account.available_funds.to_string()),
+        kv_wide(
+            "maint_margin",
+            &selected_account.maintenance_margin.to_string(),
+        ),
+        kv_wide("day_pnl", &selected_account.day_pnl_value.to_string()),
         kv_wide(
             "unrealized",
-            &format!("{:+.2}", selected_account.unrealized_pnl),
+            &selected_account.unrealized_pnl_value.to_string(),
         ),
+        kv_wide(
+            "gross_exposure",
+            &selected_account.gross_exposure.to_string(),
+        ),
+        kv_wide("net_exposure", &selected_account.net_exposure.to_string()),
         kv_wide(
             "exposure",
             &format!("{:.1}%", selected_account.exposure_pct),
@@ -491,6 +545,14 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
         kv_wide(
             "short_blocked",
             &selected_account.short_intents_blocked_today.to_string(),
+        ),
+        kv_wide("pdt", selected_account.pdt_status.as_deref().unwrap_or("-")),
+        kv_wide(
+            "restriction",
+            selected_account
+                .trading_restriction
+                .as_deref()
+                .unwrap_or("-"),
         ),
         kv_wide("runtime", &runtime_flags(selected_account)),
     ];
@@ -573,9 +635,47 @@ fn render_replay(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let lines = vec![
+    let mut lines = vec![
         "Command palette".to_string(),
         kv_wide("input", &app.command_palette_input),
+        String::new(),
+        "Recent command evidence".to_string(),
+    ];
+    if app.state.commands.by_id.is_empty() {
+        lines.push("no command authority/audit events".to_string());
+    } else {
+        lines.push(format!(
+            "{:<16} {:<20} {:<10} {:<12} {}",
+            "COMMAND_ID", "TYPE", "AUTH", "AUDIT", "SCOPE"
+        ));
+        for command in app.state.commands.by_id.values().rev().take(12) {
+            lines.push(format!(
+                "{:<16} {:<20} {:<10} {:<12} {}",
+                truncate(&command.command_id, 16),
+                truncate(command.command_type.as_deref().unwrap_or("-"), 20),
+                truncate(command.authority_status.as_deref().unwrap_or("-"), 10),
+                truncate(command.audit_status.as_deref().unwrap_or("-"), 12),
+                truncate(
+                    command
+                        .scope
+                        .as_deref()
+                        .or(command.target.as_deref())
+                        .unwrap_or("-"),
+                    24
+                )
+            ));
+            if !command.reason_codes.is_empty() {
+                lines.push(format!("  reason_codes {}", command.reason_codes.join(",")));
+            }
+            if !command.matched_policy_ids.is_empty() {
+                lines.push(format!(
+                    "  policies     {}",
+                    command.matched_policy_ids.join(",")
+                ));
+            }
+        }
+    }
+    lines.extend([
         String::new(),
         "Replayable tradectl examples".to_string(),
         "pause-strategy <strategy_id>".to_string(),
@@ -591,7 +691,7 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
         "global-kill-switch global --confirm 'KILL global'".to_string(),
         String::new(),
         "TUI does not send these commands. Use tradectl or command-gateway audit flow.".to_string(),
-    ];
+    ]);
     frame.render_widget(panel("Commands", lines), area);
 }
 
@@ -778,8 +878,52 @@ fn strategy_detail_lines(strategy: &StrategyView) -> Vec<String> {
         kv_wide("strategy", &strategy.strategy_id),
         kv_wide("state", &strategy.state),
         kv_wide("mode", &strategy.mode),
+        kv_wide("enabled", &strategy.enabled.to_string()),
+        kv_wide("window", strategy.trading_window.as_deref().unwrap_or("-")),
+        kv_wide("phase", &strategy.current_phase),
+        kv_wide(
+            "universe_version",
+            strategy.universe_version.as_deref().unwrap_or("-"),
+        ),
         kv_wide("universe", &strategy.universe_count.to_string()),
+        kv_wide(
+            "symbols active/watch/l2",
+            &format!(
+                "{}/{}/{}",
+                strategy.active_symbol_count,
+                strategy.watched_symbol_count,
+                strategy.l2_allocated_symbol_count
+            ),
+        ),
         kv_wide("pnl", &format!("{:+.2}", strategy.pnl)),
+        kv_wide(
+            "rates sig/rej/fill/cxl",
+            &format!(
+                "{:.1}/{:.1}/{:.1}/{:.1}",
+                strategy.signal_rate_1m,
+                strategy.reject_rate_1m,
+                strategy.fill_rate_1m,
+                strategy.cancel_rate_1m
+            ),
+        ),
+        kv_wide(
+            "latency i2s/s2a/a2f",
+            &format!(
+                "{}/{}/{}",
+                format_optional_u64(strategy.avg_intent_to_submit_ms),
+                format_optional_u64(strategy.avg_submit_to_ack_ms),
+                format_optional_u64(strategy.avg_ack_to_fill_ms)
+            ),
+        ),
+        kv_wide(
+            "trades today/max",
+            &format!("{}/{}", strategy.trades_today, strategy.max_trades_today),
+        ),
+        kv_wide("stops", &strategy.consecutive_stops.to_string()),
+        kv_wide(
+            "loss_budget_used",
+            &format!("{:.1}%", strategy.daily_loss_used_pct),
+        ),
         kv_wide(
             "heartbeat_lag_ms",
             &strategy
@@ -987,5 +1131,11 @@ fn kv_narrow(label: &str, value: &str) -> String {
 fn format_optional_price(price: Option<&trade_core::Price>) -> String {
     price
         .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
 }

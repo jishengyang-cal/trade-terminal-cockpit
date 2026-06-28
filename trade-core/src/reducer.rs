@@ -1,8 +1,9 @@
 use crate::events::{
-    AlertAcknowledged, AlertRaised, BrokerAckReceived, CancelRejected, CancelRequested,
-    CommandAuditRecorded, DomainEvent, EventEnvelope, IntentCreated, OrderCancelled, OrderFill,
-    OrderRejected, OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade,
-    RiskLimitBreached, SignalGenerated, StrategyHeartbeat, StrategyStateChanged,
+    AccountSnapshot, AlertAcknowledged, AlertRaised, BrokerAckReceived, CancelRejected,
+    CancelRequested, CommandAuditRecorded, CommandAuthorityDecided, DomainEvent, EventEnvelope,
+    IngestDiagnosticRecorded, IntentCreated, OrderCancelled, OrderFill, OrderRejected,
+    OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade, RiskLimitBreached,
+    SignalGenerated, StrategyHealthUpdated, StrategyHeartbeat, StrategyStateChanged,
 };
 use crate::state::{
     AlertView, AppState, EventSummary, OrderLifecycleState, PositionView, RiskBlock,
@@ -59,8 +60,14 @@ pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
     let event_id = envelope.event_id.clone();
 
     match envelope.payload {
+        DomainEvent::AccountSnapshot(event) => {
+            reduce_account_snapshot(state, event);
+        }
         DomainEvent::StrategyHeartbeat(event) => {
             reduce_strategy_heartbeat(state, sequence, event);
+        }
+        DomainEvent::StrategyHealthUpdated(event) => {
+            reduce_strategy_health_updated(state, event);
         }
         DomainEvent::StrategyStateChanged(event) => {
             reduce_strategy_state_changed(state, sequence, event);
@@ -107,6 +114,12 @@ pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
         }
         DomainEvent::AlertRaised(event) => reduce_alert_raised(state, event),
         DomainEvent::AlertAcknowledged(event) => reduce_alert_acknowledged(state, event),
+        DomainEvent::IngestDiagnosticRecorded(event) => {
+            reduce_ingest_diagnostic(state, publish_ts_ns, event)
+        }
+        DomainEvent::CommandAuthorityDecided(event) => {
+            reduce_command_authority_decided(state, event)
+        }
         DomainEvent::CommandAuditRecorded(event) => reduce_command_audit_recorded(state, event),
     }
 }
@@ -114,8 +127,105 @@ pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
 fn is_coalescible_projection_event(event: &DomainEvent) -> bool {
     matches!(
         event,
-        DomainEvent::StrategyHeartbeat(_) | DomainEvent::PositionSnapshot(_)
+        DomainEvent::AccountSnapshot(_)
+            | DomainEvent::StrategyHeartbeat(_)
+            | DomainEvent::StrategyHealthUpdated(_)
+            | DomainEvent::PositionSnapshot(_)
+            | DomainEvent::IngestDiagnosticRecorded(_)
     )
+}
+
+fn reduce_account_snapshot(state: &mut AppState, event: AccountSnapshot) {
+    let account = state.accounts.get_or_insert(&event.account_id);
+    if let Some(mode) = event.mode {
+        account.mode = mode;
+    }
+    if let Some(broker) = event.broker {
+        account.broker = broker;
+    }
+    if let Some(connected) = event.broker_connected {
+        account.broker_connected = connected;
+    }
+    if let Some(currency) = event.account_currency {
+        account.account_currency = currency;
+    }
+    if let Some(value) = event.cash {
+        account.cash_value = value;
+    }
+    if let Some(value) = event.buying_power {
+        account.buying_power_value = value;
+    }
+    if let Some(value) = event.day_pnl {
+        account.day_pnl_value = value;
+    }
+    if let Some(value) = event.realized_pnl {
+        account.realized_pnl_value = value;
+    }
+    if let Some(value) = event.unrealized_pnl {
+        account.unrealized_pnl_value = value;
+    }
+    if let Some(value) = event.net_liquidation {
+        account.net_liquidation = value;
+    }
+    if let Some(value) = event.equity_with_loan {
+        account.equity_with_loan = value;
+    }
+    if let Some(value) = event.initial_margin {
+        account.initial_margin = value;
+    }
+    if let Some(value) = event.maintenance_margin {
+        account.maintenance_margin = value;
+    }
+    if let Some(value) = event.excess_liquidity {
+        account.excess_liquidity = value;
+    }
+    if let Some(value) = event.available_funds {
+        account.available_funds = value;
+    }
+    if event.sma.is_some() {
+        account.sma = event.sma;
+    }
+    if let Some(value) = event.day_trades_remaining {
+        account.day_trades_remaining = Some(value);
+    }
+    if let Some(value) = event.pdt_status {
+        account.pdt_status = Some(value);
+    }
+    if let Some(value) = event.trading_restriction {
+        account.trading_restriction = Some(value);
+    }
+    if event.settled_cash.is_some() {
+        account.settled_cash = event.settled_cash;
+    }
+    if event.unsettled_cash.is_some() {
+        account.unsettled_cash = event.unsettled_cash;
+    }
+    if let Some(value) = event.gross_exposure {
+        account.gross_exposure = value;
+    }
+    if let Some(value) = event.net_exposure {
+        account.net_exposure = value;
+    }
+    if let Some(value) = event.long_market_value {
+        account.long_market_value = value;
+    }
+    if let Some(value) = event.short_market_value {
+        account.short_market_value = value;
+    }
+    if let Some(value) = event.exposure_pct {
+        account.exposure_pct = value;
+    }
+    if let Some(value) = event.margin_usage_pct {
+        account.margin_usage_pct = value;
+    }
+    if let Some(value) = event.short_permission {
+        account.short_permission = value;
+    }
+    if let Some(value) = event.short_intents_blocked_today {
+        account.short_intents_blocked_today = value;
+    }
+    account.sync_legacy_f64_from_money();
+    refresh_account_aggregate(state);
 }
 
 fn reduce_strategy_heartbeat(state: &mut AppState, sequence: u64, event: StrategyHeartbeat) {
@@ -124,6 +234,81 @@ fn reduce_strategy_heartbeat(state: &mut AppState, sequence: u64, event: Strateg
     strategy.mode = event.mode;
     strategy.heartbeat_lag_ms = Some(event.heartbeat_lag_ms);
     strategy.last_event_sequence = Some(sequence);
+}
+
+fn reduce_strategy_health_updated(state: &mut AppState, event: StrategyHealthUpdated) {
+    let strategy = state.strategies.get_or_insert(&event.strategy_id);
+    if let Some(value) = event.enabled {
+        strategy.enabled = value;
+    }
+    if let Some(value) = event.trading_window {
+        strategy.trading_window = Some(value);
+    }
+    if let Some(value) = event.current_phase {
+        strategy.current_phase = value;
+    }
+    if let Some(value) = event.universe_version {
+        strategy.universe_version = Some(value);
+    }
+    if let Some(value) = event.universe_count {
+        strategy.universe_count = value;
+    }
+    if let Some(value) = event.active_symbol_count {
+        strategy.active_symbol_count = value;
+    }
+    if let Some(value) = event.watched_symbol_count {
+        strategy.watched_symbol_count = value;
+    }
+    if let Some(value) = event.l2_allocated_symbol_count {
+        strategy.l2_allocated_symbol_count = value;
+    }
+    if let Some(value) = event.signal_rate_1m {
+        strategy.signal_rate_1m = value;
+    }
+    if let Some(value) = event.reject_rate_1m {
+        strategy.reject_rate_1m = value;
+    }
+    if let Some(value) = event.fill_rate_1m {
+        strategy.fill_rate_1m = value;
+    }
+    if let Some(value) = event.cancel_rate_1m {
+        strategy.cancel_rate_1m = value;
+    }
+    if let Some(value) = event.avg_intent_to_submit_ms {
+        strategy.avg_intent_to_submit_ms = Some(value);
+    }
+    if let Some(value) = event.avg_submit_to_ack_ms {
+        strategy.avg_submit_to_ack_ms = Some(value);
+    }
+    if let Some(value) = event.avg_ack_to_fill_ms {
+        strategy.avg_ack_to_fill_ms = Some(value);
+    }
+    if let Some(value) = event.consecutive_stops {
+        strategy.consecutive_stops = value;
+    }
+    if let Some(value) = event.trades_today {
+        strategy.trades_today = value;
+    }
+    if let Some(value) = event.max_trades_today {
+        strategy.max_trades_today = value;
+    }
+    if let Some(value) = event.daily_loss_used_pct {
+        strategy.daily_loss_used_pct = value;
+    }
+    if !event.parameters.is_empty() {
+        strategy.parameters = event.parameters;
+    }
+    if !event.risk_gates.is_empty() {
+        strategy.risk_gates = event
+            .risk_gates
+            .into_iter()
+            .map(|gate| crate::state::StrategyRiskGateView {
+                name: gate.name,
+                passed: gate.passed,
+                detail: gate.detail,
+            })
+            .collect();
+    }
 }
 
 fn reduce_strategy_state_changed(state: &mut AppState, sequence: u64, event: StrategyStateChanged) {
@@ -649,7 +834,67 @@ fn reduce_alert_acknowledged(state: &mut AppState, event: AlertAcknowledged) {
     }
 }
 
+fn reduce_ingest_diagnostic(
+    state: &mut AppState,
+    publish_ts_ns: i64,
+    event: IngestDiagnosticRecorded,
+) {
+    if let Some(stream) = event.stream {
+        state.connection.stream_name = Some(stream);
+    }
+    if let Some(consumer) = event.consumer {
+        state.connection.consumer_name = Some(consumer);
+    }
+    if let Some(subject) = event.subject {
+        state.connection.last_nats_subject = Some(subject);
+    }
+    state.connection.filtered_events += event.filtered_count;
+    state.connection.jetstream_acks += event.acked_count;
+    if event.reconnect {
+        state.connection.nats_reconnect_count += 1;
+        state.connection.last_reconnect_ts_ns = Some(publish_ts_ns);
+    }
+    if event.decode_error {
+        state.connection.decode_errors += 1;
+    }
+    if matches!(event.severity.as_str(), "warn" | "error") {
+        state.connection.ingest_errors += 1;
+        state.connection.last_error = Some(event.message);
+    }
+    if event.source.contains("nats") || event.source.contains("jetstream") {
+        state.connection.nats = if matches!(event.severity.as_str(), "error") {
+            "degraded".to_string()
+        } else {
+            "connected".to_string()
+        };
+    }
+}
+
+fn reduce_command_authority_decided(state: &mut AppState, event: CommandAuthorityDecided) {
+    let command = state.commands.get_or_insert(&event.command_id);
+    command.operator_id = Some(event.operator_id);
+    command.command_type = Some(event.command_type);
+    command.authority_decision_id = Some(event.decision_id);
+    command.authority_status = Some(event.status);
+    command.reason_codes = event.reason_codes;
+    command.matched_policy_ids = event.matched_policy_ids;
+    command.capability = Some(event.capability);
+    command.scope = Some(event.scope);
+    command.approved_by = event.approved_by;
+    command.decided_ts_ns = Some(event.decided_ts_ns);
+    command.authority_policy_version = Some(event.authority_policy_version);
+    command.target_environment = Some(event.target_environment);
+}
+
 fn reduce_command_audit_recorded(state: &mut AppState, event: CommandAuditRecorded) {
+    let command = state.commands.get_or_insert(&event.command_id);
+    command.operator_id = Some(event.operator_id.clone());
+    command.command_type = Some(event.command_type.clone());
+    command.audit_status = Some(event.status.clone());
+    command.audit_reason = Some(event.reason.clone());
+    command.target = event.target.clone();
+    command.aggregate_id = event.target.clone();
+
     if event.command_type == "GlobalKillSwitchRequested" && command_was_applied(&event.status) {
         state.risk.kill_switch_active = true;
         state.risk.global_state = "KILL_SWITCH".to_string();
@@ -798,6 +1043,16 @@ fn headline(event: &DomainEvent) -> String {
                 event.strategy_id, event.state, event.heartbeat_lag_ms
             )
         }
+        DomainEvent::AccountSnapshot(event) => {
+            format!(
+                "account {} {}",
+                event.account_id,
+                event.mode.as_deref().unwrap_or("-")
+            )
+        }
+        DomainEvent::StrategyHealthUpdated(event) => {
+            format!("strategy health {}", event.strategy_id)
+        }
         DomainEvent::StrategyStateChanged(event) => {
             format!(
                 "{} -> {} ({})",
@@ -852,6 +1107,15 @@ fn headline(event: &DomainEvent) -> String {
         }
         DomainEvent::AlertAcknowledged(event) => {
             format!("ack {} by {}", event.alert_id, event.operator_id)
+        }
+        DomainEvent::IngestDiagnosticRecorded(event) => {
+            format!("ingest {} {}", event.severity, event.message)
+        }
+        DomainEvent::CommandAuthorityDecided(event) => {
+            format!(
+                "authority {} {} {}",
+                event.command_type, event.status, event.capability
+            )
         }
         DomainEvent::CommandAuditRecorded(event) => {
             let target = event

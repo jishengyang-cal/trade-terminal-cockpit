@@ -6,7 +6,8 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
-use trade_core::{EventEnvelope, EventFilter};
+use trade_core::events::IngestDiagnosticRecorded;
+use trade_core::{DomainEvent, EventEnvelope, EventFilter};
 
 pub fn load_events(cli: &Cli, filter: &EventFilter) -> Result<Vec<EventEnvelope>> {
     let events = if cli.mock || (cli.event_jsonl.is_none() && cli.snapshot_json.is_none()) {
@@ -109,7 +110,20 @@ fn spawn_jetstream_consumer(
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
-                    eprintln!("trade-tui jetstream: failed to create runtime: {error}");
+                    let _ = send_ingest_diagnostic(
+                        &tx,
+                        "jetstream",
+                        Some(&stream_name),
+                        Some(&durable_name),
+                        None,
+                        "error",
+                        format!("failed to create runtime: {error}"),
+                        Some("runtime"),
+                        false,
+                        false,
+                        0,
+                        0,
+                    );
                     return;
                 }
             };
@@ -126,8 +140,19 @@ fn spawn_jetstream_consumer(
                     )
                     .await
                     {
-                        eprintln!(
-                            "trade-tui jetstream: {stream_name}/{durable_name} disconnected: {error}"
+                        let _ = send_ingest_diagnostic(
+                            &tx,
+                            "jetstream",
+                            Some(&stream_name),
+                            Some(&durable_name),
+                            None,
+                            "error",
+                            format!("{stream_name}/{durable_name} disconnected: {error}"),
+                            Some("disconnect"),
+                            true,
+                            false,
+                            0,
+                            0,
                         );
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -161,20 +186,51 @@ async fn run_jetstream_consumer_once(
             durable_name,
             async_nats::jetstream::consumer::pull::Config {
                 durable_name: Some(durable_name.to_string()),
-                filter_subject,
+                filter_subject: filter_subject.clone(),
                 ..Default::default()
             },
         )
         .await?;
 
+    let _ = send_ingest_diagnostic(
+        tx,
+        "jetstream",
+        Some(stream_name),
+        Some(durable_name),
+        Some(&filter_subject),
+        "info",
+        "consumer connected",
+        None,
+        false,
+        false,
+        0,
+        0,
+    );
+
     let mut messages = consumer.messages().await?;
     while let Some(message) = messages.next().await {
         let message = message?;
         match serde_json::from_slice::<EventEnvelope>(message.payload.as_ref()) {
-            Ok(event) => {
+            Ok(mut event) => {
+                stamp_ingested_event(&mut event, Some(stream_name), Some(&filter_subject));
                 if filter.matches(&event) {
                     tx.send(event)
                         .map_err(|_| anyhow::anyhow!("event receiver closed"))?;
+                } else {
+                    let _ = send_ingest_diagnostic(
+                        tx,
+                        "jetstream",
+                        Some(stream_name),
+                        Some(durable_name),
+                        Some(&filter_subject),
+                        "info",
+                        "event filtered by active TUI filter",
+                        None,
+                        false,
+                        false,
+                        1,
+                        0,
+                    );
                 }
                 message
                     .ack()
@@ -182,7 +238,20 @@ async fn run_jetstream_consumer_once(
                     .map_err(|error| anyhow::anyhow!("jetstream ack failed: {error}"))?;
             }
             Err(error) => {
-                eprintln!("trade-tui jetstream: failed to decode {stream_name}: {error}");
+                let _ = send_ingest_diagnostic(
+                    tx,
+                    "jetstream",
+                    Some(stream_name),
+                    Some(durable_name),
+                    Some(&filter_subject),
+                    "error",
+                    format!("failed to decode {stream_name}: {error}"),
+                    Some("decode"),
+                    false,
+                    true,
+                    0,
+                    0,
+                );
                 message
                     .ack()
                     .await
@@ -209,14 +278,40 @@ fn spawn_jsonl_follow(cli: &Cli, filter: EventFilter, tx: Sender<EventEnvelope>)
                 let file = match File::open(&path) {
                     Ok(file) => file,
                     Err(error) => {
-                        eprintln!("trade-tui follow: failed to open {}: {error}", path.display());
+                        let _ = send_ingest_diagnostic(
+                            &tx,
+                            "jsonl-follow",
+                            None,
+                            None,
+                            Some(&path.display().to_string()),
+                            "error",
+                            format!("failed to open {}: {error}", path.display()),
+                            Some("open"),
+                            false,
+                            false,
+                            0,
+                            0,
+                        );
                         thread::sleep(poll);
                         continue;
                     }
                 };
                 let mut reader = BufReader::new(file);
                 if let Err(error) = reader.seek(SeekFrom::End(0)) {
-                    eprintln!("trade-tui follow: failed to seek {}: {error}", path.display());
+                    let _ = send_ingest_diagnostic(
+                        &tx,
+                        "jsonl-follow",
+                        None,
+                        None,
+                        Some(&path.display().to_string()),
+                        "error",
+                        format!("failed to seek {}: {error}", path.display()),
+                        Some("seek"),
+                        false,
+                        false,
+                        0,
+                        0,
+                    );
                     thread::sleep(poll);
                     continue;
                 }
@@ -240,15 +335,43 @@ fn spawn_jsonl_follow(cli: &Cli, filter: EventFilter, tx: Sender<EventEnvelope>)
                                         return;
                                     }
                                 }
-                                Err(error) => eprintln!(
-                                    "trade-tui follow: failed to decode appended line {} from {}: {error}",
-                                    line_number,
-                                    path.display()
-                                ),
+                                Err(error) => {
+                                    let _ = send_ingest_diagnostic(
+                                        &tx,
+                                        "jsonl-follow",
+                                        None,
+                                        None,
+                                        Some(&path.display().to_string()),
+                                        "error",
+                                        format!(
+                                            "failed to decode appended line {} from {}: {error}",
+                                            line_number,
+                                            path.display()
+                                        ),
+                                        Some("decode"),
+                                        false,
+                                        true,
+                                        0,
+                                        0,
+                                    );
+                                }
                             }
                         }
                         Err(error) => {
-                            eprintln!("trade-tui follow: read error from {}: {error}", path.display());
+                            let _ = send_ingest_diagnostic(
+                                &tx,
+                                "jsonl-follow",
+                                None,
+                                None,
+                                Some(&path.display().to_string()),
+                                "error",
+                                format!("read error from {}: {error}", path.display()),
+                                Some("read"),
+                                false,
+                                false,
+                                0,
+                                0,
+                            );
                             thread::sleep(poll);
                             break;
                         }
@@ -277,7 +400,20 @@ fn spawn_nats_subject(
             {
                 Ok(runtime) => runtime,
                 Err(error) => {
-                    eprintln!("trade-tui nats: failed to create runtime: {error}");
+                    let _ = send_ingest_diagnostic(
+                        &tx,
+                        "nats",
+                        None,
+                        None,
+                        Some(&subject),
+                        "error",
+                        format!("failed to create runtime: {error}"),
+                        Some("runtime"),
+                        false,
+                        false,
+                        0,
+                        0,
+                    );
                     return;
                 }
             };
@@ -287,29 +423,99 @@ fn spawn_nats_subject(
                     match async_nats::connect(url.clone()).await {
                         Ok(client) => match client.subscribe(subject.clone()).await {
                             Ok(mut subscriber) => {
+                                let _ = send_ingest_diagnostic(
+                                    &tx,
+                                    "nats",
+                                    None,
+                                    None,
+                                    Some(&subject),
+                                    "info",
+                                    "subject subscribed",
+                                    None,
+                                    false,
+                                    false,
+                                    0,
+                                    0,
+                                );
                                 while let Some(message) = subscriber.next().await {
                                     match serde_json::from_slice::<EventEnvelope>(
                                         message.payload.as_ref(),
                                     ) {
-                                        Ok(event) => {
+                                        Ok(mut event) => {
+                                            stamp_ingested_event(&mut event, None, Some(&subject));
                                             if !filter.matches(&event) {
+                                                let _ = send_ingest_diagnostic(
+                                                    &tx,
+                                                    "nats",
+                                                    None,
+                                                    None,
+                                                    Some(&subject),
+                                                    "info",
+                                                    "event filtered by active TUI filter",
+                                                    None,
+                                                    false,
+                                                    false,
+                                                    1,
+                                                    0,
+                                                );
                                                 continue;
                                             }
                                             if tx.send(event).is_err() {
                                                 return;
                                             }
                                         }
-                                        Err(error) => eprintln!(
-                                            "trade-tui nats: failed to decode {subject}: {error}"
-                                        ),
+                                        Err(error) => {
+                                            let _ = send_ingest_diagnostic(
+                                                &tx,
+                                                "nats",
+                                                None,
+                                                None,
+                                                Some(&subject),
+                                                "error",
+                                                format!("failed to decode {subject}: {error}"),
+                                                Some("decode"),
+                                                false,
+                                                true,
+                                                0,
+                                                0,
+                                            );
+                                        }
                                     }
                                 }
                             }
                             Err(error) => {
-                                eprintln!("trade-tui nats: failed to subscribe {subject}: {error}")
+                                let _ = send_ingest_diagnostic(
+                                    &tx,
+                                    "nats",
+                                    None,
+                                    None,
+                                    Some(&subject),
+                                    "error",
+                                    format!("failed to subscribe {subject}: {error}"),
+                                    Some("subscribe"),
+                                    true,
+                                    false,
+                                    0,
+                                    0,
+                                );
                             }
                         },
-                        Err(error) => eprintln!("trade-tui nats: failed to connect {url}: {error}"),
+                        Err(error) => {
+                            let _ = send_ingest_diagnostic(
+                                &tx,
+                                "nats",
+                                None,
+                                None,
+                                Some(&subject),
+                                "error",
+                                format!("failed to connect {url}: {error}"),
+                                Some("connect"),
+                                true,
+                                false,
+                                0,
+                                0,
+                            );
+                        }
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
@@ -318,4 +524,60 @@ fn spawn_nats_subject(
         .context("failed to spawn nats subscribe thread")?;
 
     Ok(())
+}
+
+fn stamp_ingested_event(event: &mut EventEnvelope, stream: Option<&str>, subject: Option<&str>) {
+    let now = trade_core::unix_ts_ns();
+    event.receive_ts_ns = Some(now);
+    event.ingest_ts_ns = now;
+    if event.stream.is_empty() {
+        if let Some(stream) = stream {
+            event.stream = stream.to_string();
+        }
+    }
+    if event.subject.is_empty() {
+        if let Some(subject) = subject {
+            event.subject = subject.to_string();
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn send_ingest_diagnostic(
+    tx: &Sender<EventEnvelope>,
+    source: &str,
+    stream: Option<&str>,
+    consumer: Option<&str>,
+    subject: Option<&str>,
+    severity: &str,
+    message: impl Into<String>,
+    error_kind: Option<&str>,
+    reconnect: bool,
+    decode_error: bool,
+    filtered_count: u64,
+    acked_count: u64,
+) -> bool {
+    let ts = trade_core::unix_ts_ns();
+    let mut envelope = EventEnvelope::new(
+        format!("ingest-{source}-{ts}"),
+        source.to_string(),
+        ts as u64,
+        "trade-tui-ingest",
+        DomainEvent::IngestDiagnosticRecorded(IngestDiagnosticRecorded {
+            source: source.to_string(),
+            stream: stream.map(str::to_string),
+            consumer: consumer.map(str::to_string),
+            subject: subject.map(str::to_string),
+            severity: severity.to_string(),
+            message: message.into(),
+            error_kind: error_kind.map(str::to_string),
+            reconnect,
+            decode_error,
+            filtered_count,
+            acked_count,
+        }),
+    );
+    envelope.stream = stream.unwrap_or_default().to_string();
+    envelope.subject = subject.unwrap_or_default().to_string();
+    tx.send(envelope).is_ok()
 }

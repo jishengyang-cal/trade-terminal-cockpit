@@ -37,6 +37,22 @@ message CommandEnvelope {
   string command_hash = 25;
 }
 
+message AuthorityDecision {
+  string decision_id = 1;
+  string command_id = 2;
+  string status = 3;
+  repeated string reason_codes = 4;
+  repeated string matched_policy_ids = 5;
+  string operator_id = 6;
+  string command_type = 7;
+  string capability = 8;
+  string scope = 9;
+  repeated string approved_by = 10;
+  int64 decided_ts_ns = 11;
+  string authority_policy_version = 12;
+  string target_environment = 13;
+}
+
 message PauseStrategyRequested {
   string strategy_id = 1;
 }

@@ -133,6 +133,16 @@ Core trading evidence avoids naked floating-point prices in order lifecycle
 state. `trade-core` exposes `Price` and `Money` fixed-scale structs, while JSON
 deserialization remains backward-compatible with existing numeric fixtures.
 
+Account projections accept `AccountSnapshot` events with fixed-scale cash,
+buying power, PnL, margin, net liquidation, PDT/restriction, and exposure
+fields. The cockpit keeps both per-account views and an aggregate multi-account
+view; the aggregate sums Money fields and keeps max/risk-style percentages
+conservative.
+
+Strategy projections accept `StrategyHealthUpdated` events for trading window,
+phase, universe version, watched/active/L2 symbol counts, one-minute rates,
+latency averages, consecutive stops, trade budget, parameters, and risk gates.
+
 Order chains retain broker and routing evidence such as `client_order_id`,
 `broker_order_id`, `perm_id`, route/exchange/destination, submitted and
 remaining quantity, fill execution IDs, cumulative fill quantity, latency
@@ -147,6 +157,12 @@ state surface rather than a growing log tail.
 projection state, input file SHA-256 hashes, event ID counts, duplicate counts,
 sequence gap counts, schema versions, generator name, and best-effort git
 commit metadata.
+
+NATS Core, JetStream, and JSONL follow ingestion errors are domain-visible:
+connect/reconnect, subscribe, decode, and filter diagnostics are emitted as
+`IngestDiagnosticRecorded` events and reduced into TUI connection health. The
+TUI also tracks per-tick drain counts, render duration, slow frames, and backlog
+estimates.
 
 ## Tailnet Access
 
@@ -242,11 +258,13 @@ cargo run -p tradectl -- \
   --output-json /tmp/trade-terminal-cockpit-evidence.json
 ```
 
-`command-gateway` validates required operator/session/reason/capability fields
-and writes audit events. It also checks command type against the expected
-capability, with optional `--allow-capability` allowlisting. Dangerous envelopes
-are rejected by default unless the gateway is started with an explicit
-`--allow-dangerous` flag.
+`command-gateway` validates required operator/session/reason/capability fields,
+writes a `CommandAuthorityDecided` event, then writes the final audit/dispatch
+event. It also checks command type against the expected capability, with
+optional `--allow-capability` allowlisting. Dangerous envelopes are rejected by
+default unless the gateway is started with an explicit `--allow-dangerous` flag.
+The TUI Commands screen shows authority status, audit status, policy ids, reason
+codes, capability, and scope from those events.
 
 With `--execute-broker-control`, the gateway can dispatch semantically exact
 runtime controls to an external `broker-control-gateway`:

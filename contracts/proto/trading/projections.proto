@@ -20,6 +20,28 @@ message OverviewSnapshot {
   uint64 short_intents_blocked_today = 13;
   string risk_state = 14;
   AccountRuntimeControls runtime_controls = 15;
+  Money cash_value = 16;
+  Money buying_power_value = 17;
+  Money day_pnl_value = 18;
+  Money realized_pnl_value = 19;
+  Money unrealized_pnl_value = 20;
+  string account_currency = 21;
+  Money net_liquidation = 22;
+  Money equity_with_loan = 23;
+  Money initial_margin = 24;
+  Money maintenance_margin = 25;
+  Money excess_liquidity = 26;
+  Money available_funds = 27;
+  Money sma = 28;
+  optional int32 day_trades_remaining = 29;
+  string pdt_status = 30;
+  string trading_restriction = 31;
+  Money settled_cash = 32;
+  Money unsettled_cash = 33;
+  Money gross_exposure = 34;
+  Money net_exposure = 35;
+  Money long_market_value = 36;
+  Money short_market_value = 37;
 }
 
 message AccountRuntimeControls {
@@ -44,6 +66,24 @@ message StrategySnapshot {
   optional uint64 last_signal_sequence = 12;
   optional uint64 last_intent_sequence = 13;
   optional uint64 last_order_sequence = 14;
+  bool enabled = 15;
+  string trading_window = 16;
+  string current_phase = 17;
+  string universe_version = 18;
+  uint64 active_symbol_count = 19;
+  uint64 watched_symbol_count = 20;
+  uint64 l2_allocated_symbol_count = 21;
+  double signal_rate_1m = 22;
+  double reject_rate_1m = 23;
+  double fill_rate_1m = 24;
+  double cancel_rate_1m = 25;
+  optional uint64 avg_intent_to_submit_ms = 26;
+  optional uint64 avg_submit_to_ack_ms = 27;
+  optional uint64 avg_ack_to_fill_ms = 28;
+  uint64 consecutive_stops = 29;
+  uint64 trades_today = 30;
+  uint64 max_trades_today = 31;
+  double daily_loss_used_pct = 32;
 }
 
 message StrategyRiskGate {
@@ -146,6 +186,26 @@ message AlertProjection {
   string acknowledge_reason = 7;
 }
 
+message CommandEvidenceProjection {
+  string command_id = 1;
+  string operator_id = 2;
+  string command_type = 3;
+  string aggregate_id = 4;
+  string audit_status = 5;
+  string audit_reason = 6;
+  string target = 7;
+  string authority_decision_id = 8;
+  string authority_status = 9;
+  repeated string reason_codes = 10;
+  repeated string matched_policy_ids = 11;
+  string capability = 12;
+  string scope = 13;
+  repeated string approved_by = 14;
+  optional int64 decided_ts_ns = 15;
+  string authority_policy_version = 16;
+  string target_environment = 17;
+}
+
 message TerminalProjectionSnapshot {
   string schema_version = 1;
   int64 snapshot_ts_ns = 2;
@@ -158,6 +218,7 @@ message TerminalProjectionSnapshot {
   RiskSnapshot risk = 9;
   repeated AlertProjection alerts = 10;
   repeated OverviewSnapshot accounts = 11;
+  repeated CommandEvidenceProjection commands = 12;
 }
 
 message EventFilter {

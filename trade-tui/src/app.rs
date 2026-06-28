@@ -10,7 +10,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use trade_core::state::{EventSummary, OrderChain, StrategyView};
 use trade_core::{reduce_event, AppState, EventEnvelope};
 
@@ -96,7 +96,14 @@ impl App {
 
         while !self.should_quit {
             self.drain_events();
+            let render_started = Instant::now();
             terminal.draw(|frame| render::render(frame, self))?;
+            let render_duration = render_started.elapsed();
+            self.state.connection.last_render_duration_ms =
+                render_duration.as_millis().min(u128::from(u64::MAX)) as u64;
+            if render_duration > tick_rate {
+                self.state.connection.render_slow_frames += 1;
+            }
             if event::poll(tick_rate)? {
                 if let event::Event::Key(key) = event::read()? {
                     input::handle_key(self, key);
@@ -108,11 +115,25 @@ impl App {
     }
 
     fn drain_events(&mut self) {
+        let mut drained = 0_u64;
         if let Some(rx) = &self.event_rx {
-            while let Ok(event) = rx.try_recv() {
+            while drained < self.state.connection.max_drain_per_tick {
+                let Ok(event) = rx.try_recv() else {
+                    break;
+                };
                 reduce_event(&mut self.state, event);
+                drained += 1;
+            }
+            if drained == self.state.connection.max_drain_per_tick {
+                self.state.connection.event_backlog =
+                    self.state.connection.event_backlog.saturating_add(1);
+                self.state.connection.event_rx_backlog_estimate =
+                    Some(self.state.connection.event_backlog);
+            } else {
+                self.state.connection.event_rx_backlog_estimate = None;
             }
         }
+        self.state.connection.events_drained_last_tick = drained;
     }
 
     pub fn next_screen(&mut self) {
