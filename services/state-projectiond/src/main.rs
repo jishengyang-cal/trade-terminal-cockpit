@@ -1,20 +1,37 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+use std::thread;
+use std::time::Duration;
+use trade_core::events::IngestDiagnosticRecorded;
 use trade_core::state::{AlertView, AppState};
-use trade_core::{reduce_event, EventEnvelope, ProjectionSnapshot};
+use trade_core::{reduce_event, DomainEvent, EventEnvelope, ProjectionSnapshot};
 
 #[derive(Debug, Parser)]
 #[command(name = "state-projectiond")]
 #[command(about = "Build terminal projection snapshots from trading event JSONL")]
 struct Cli {
     #[arg(long, value_name = "PATH")]
-    event_jsonl: PathBuf,
+    event_jsonl: Option<PathBuf>,
+
+    #[arg(long, value_name = "URL")]
+    nats_url: Option<String>,
+
+    #[arg(long = "nats-subject", value_name = "SUBJECT", requires = "nats_url")]
+    nats_subjects: Vec<String>,
+
+    #[arg(long, value_name = "STREAM", requires = "nats_url")]
+    jetstream_stream: Option<String>,
+
+    #[arg(long, value_name = "DURABLE", requires = "nats_url")]
+    jetstream_durable: Option<String>,
 
     #[arg(long, value_name = "PATH")]
     output_json: Option<PathBuf>,
@@ -28,13 +45,23 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let state = load_state(&cli.event_jsonl)?;
-    let snapshot = build_snapshot(state.clone(), cli.schema_version.clone());
+    let mut state = if let Some(path) = cli.event_jsonl.as_ref() {
+        load_state(path)?
+    } else {
+        AppState::default()
+    };
+    state.connection.nats = projection_source(&cli);
+    let state = Arc::new(RwLock::new(state));
+    spawn_live_ingest(&cli, state.clone())?;
 
     if let Some(addr) = cli.serve.as_deref() {
-        return serve_projection(addr, state, snapshot);
+        return serve_projection(addr, state, cli.schema_version);
     }
 
+    let snapshot = {
+        let state = state.read().expect("state lock poisoned").clone();
+        build_snapshot(state, cli.schema_version.clone(), projection_source(&cli))
+    };
     let json = serde_json::to_string_pretty(&snapshot)?;
     if let Some(path) = cli.output_json {
         fs::write(&path, json).with_context(|| format!("failed to write {}", path.display()))?;
@@ -65,14 +92,361 @@ fn load_state(path: &PathBuf) -> Result<AppState> {
     Ok(state)
 }
 
-fn build_snapshot(state: AppState, schema_version: String) -> ProjectionSnapshot {
+fn projection_source(cli: &Cli) -> String {
+    if cli.jetstream_stream.is_some() || cli.jetstream_durable.is_some() {
+        "state-projectiond-jetstream".to_string()
+    } else if cli.nats_url.is_some() {
+        "state-projectiond-nats".to_string()
+    } else if cli.event_jsonl.is_some() {
+        "state-projectiond-jsonl".to_string()
+    } else {
+        "state-projectiond-empty".to_string()
+    }
+}
+
+fn spawn_live_ingest(cli: &Cli, state: Arc<RwLock<AppState>>) -> Result<()> {
+    let Some(url) = cli.nats_url.as_deref() else {
+        return Ok(());
+    };
+
+    if let (Some(stream), Some(durable)) = (
+        cli.jetstream_stream.as_deref(),
+        cli.jetstream_durable.as_deref(),
+    ) {
+        spawn_jetstream_consumer(
+            url.to_string(),
+            stream.to_string(),
+            durable.to_string(),
+            cli.nats_subjects.clone(),
+            state,
+        )?;
+        return Ok(());
+    }
+
+    for subject in &cli.nats_subjects {
+        spawn_nats_subject(url.to_string(), subject.clone(), state.clone())?;
+    }
+    Ok(())
+}
+
+fn spawn_jetstream_consumer(
+    url: String,
+    stream_name: String,
+    durable_name: String,
+    subjects: Vec<String>,
+    state: Arc<RwLock<AppState>>,
+) -> Result<()> {
+    thread::Builder::new()
+        .name(format!("state-projectiond-js-{stream_name}-{durable_name}"))
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    apply_ingest_diagnostic(
+                        &state,
+                        "jetstream",
+                        Some(&stream_name),
+                        Some(&durable_name),
+                        None,
+                        "error",
+                        format!("failed to create runtime: {error}"),
+                        Some("runtime"),
+                        false,
+                        false,
+                        0,
+                        0,
+                    );
+                    return;
+                }
+            };
+            runtime.block_on(async move {
+                loop {
+                    if let Err(error) =
+                        run_jetstream_once(&url, &stream_name, &durable_name, &subjects, &state)
+                            .await
+                    {
+                        apply_ingest_diagnostic(
+                            &state,
+                            "jetstream",
+                            Some(&stream_name),
+                            Some(&durable_name),
+                            None,
+                            "error",
+                            format!("{stream_name}/{durable_name} disconnected: {error}"),
+                            Some("disconnect"),
+                            true,
+                            false,
+                            0,
+                            0,
+                        );
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            });
+        })
+        .context("failed to spawn state-projectiond jetstream thread")?;
+    Ok(())
+}
+
+async fn run_jetstream_once(
+    url: &str,
+    stream_name: &str,
+    durable_name: &str,
+    subjects: &[String],
+    state: &Arc<RwLock<AppState>>,
+) -> Result<()> {
+    let client = async_nats::connect(url.to_string()).await?;
+    let jetstream = async_nats::jetstream::new(client);
+    let stream = jetstream.get_stream(stream_name.to_string()).await?;
+    let filter_subject = subjects
+        .iter()
+        .find(|subject| !subject.trim().is_empty())
+        .cloned()
+        .unwrap_or_default();
+    let consumer = stream
+        .get_or_create_consumer(
+            durable_name,
+            async_nats::jetstream::consumer::pull::Config {
+                durable_name: Some(durable_name.to_string()),
+                filter_subject: filter_subject.clone(),
+                ..Default::default()
+            },
+        )
+        .await?;
+    apply_ingest_diagnostic(
+        state,
+        "jetstream",
+        Some(stream_name),
+        Some(durable_name),
+        Some(&filter_subject),
+        "info",
+        "consumer connected",
+        None,
+        false,
+        false,
+        0,
+        0,
+    );
+
+    let mut messages = consumer.messages().await?;
+    while let Some(message) = messages.next().await {
+        let message = message?;
+        match serde_json::from_slice::<EventEnvelope>(message.payload.as_ref()) {
+            Ok(mut event) => {
+                stamp_ingested_event(&mut event, Some(stream_name), Some(&filter_subject));
+                apply_event(state, event);
+                message
+                    .ack()
+                    .await
+                    .map_err(|error| anyhow::anyhow!("jetstream ack failed: {error}"))?;
+            }
+            Err(error) => {
+                apply_ingest_diagnostic(
+                    state,
+                    "jetstream",
+                    Some(stream_name),
+                    Some(durable_name),
+                    Some(&filter_subject),
+                    "error",
+                    format!("failed to decode {stream_name}: {error}"),
+                    Some("decode"),
+                    false,
+                    true,
+                    0,
+                    0,
+                );
+                message
+                    .ack()
+                    .await
+                    .map_err(|error| anyhow::anyhow!("jetstream ack failed: {error}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn spawn_nats_subject(url: String, subject: String, state: Arc<RwLock<AppState>>) -> Result<()> {
+    thread::Builder::new()
+        .name(format!("state-projectiond-nats-{subject}"))
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    apply_ingest_diagnostic(
+                        &state,
+                        "nats",
+                        None,
+                        None,
+                        Some(&subject),
+                        "error",
+                        format!("failed to create runtime: {error}"),
+                        Some("runtime"),
+                        false,
+                        false,
+                        0,
+                        0,
+                    );
+                    return;
+                }
+            };
+            runtime.block_on(async move {
+                loop {
+                    match async_nats::connect(url.clone()).await {
+                        Ok(client) => match client.subscribe(subject.clone()).await {
+                            Ok(mut subscriber) => {
+                                apply_ingest_diagnostic(
+                                    &state,
+                                    "nats",
+                                    None,
+                                    None,
+                                    Some(&subject),
+                                    "info",
+                                    "subject subscribed",
+                                    None,
+                                    false,
+                                    false,
+                                    0,
+                                    0,
+                                );
+                                while let Some(message) = subscriber.next().await {
+                                    match serde_json::from_slice::<EventEnvelope>(
+                                        message.payload.as_ref(),
+                                    ) {
+                                        Ok(mut event) => {
+                                            stamp_ingested_event(&mut event, None, Some(&subject));
+                                            apply_event(&state, event);
+                                        }
+                                        Err(error) => apply_ingest_diagnostic(
+                                            &state,
+                                            "nats",
+                                            None,
+                                            None,
+                                            Some(&subject),
+                                            "error",
+                                            format!("failed to decode {subject}: {error}"),
+                                            Some("decode"),
+                                            false,
+                                            true,
+                                            0,
+                                            0,
+                                        ),
+                                    }
+                                }
+                            }
+                            Err(error) => apply_ingest_diagnostic(
+                                &state,
+                                "nats",
+                                None,
+                                None,
+                                Some(&subject),
+                                "error",
+                                format!("failed to subscribe {subject}: {error}"),
+                                Some("subscribe"),
+                                true,
+                                false,
+                                0,
+                                0,
+                            ),
+                        },
+                        Err(error) => apply_ingest_diagnostic(
+                            &state,
+                            "nats",
+                            None,
+                            None,
+                            Some(&subject),
+                            "error",
+                            format!("failed to connect {url}: {error}"),
+                            Some("connect"),
+                            true,
+                            false,
+                            0,
+                            0,
+                        ),
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            });
+        })
+        .context("failed to spawn state-projectiond nats thread")?;
+    Ok(())
+}
+
+fn stamp_ingested_event(event: &mut EventEnvelope, stream: Option<&str>, subject: Option<&str>) {
+    let now = trade_core::unix_ts_ns();
+    event.receive_ts_ns = Some(now);
+    event.ingest_ts_ns = now;
+    if event.stream.is_empty() {
+        if let Some(stream) = stream {
+            event.stream = stream.to_string();
+        }
+    }
+    if event.subject.is_empty() {
+        if let Some(subject) = subject {
+            event.subject = subject.to_string();
+        }
+    }
+}
+
+fn apply_event(state: &Arc<RwLock<AppState>>, event: EventEnvelope) {
+    let mut guard = state.write().expect("state lock poisoned");
+    reduce_event(&mut guard, event);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_ingest_diagnostic(
+    state: &Arc<RwLock<AppState>>,
+    source: &str,
+    stream: Option<&str>,
+    consumer: Option<&str>,
+    subject: Option<&str>,
+    severity: &str,
+    message: impl Into<String>,
+    error_kind: Option<&str>,
+    reconnect: bool,
+    decode_error: bool,
+    filtered_count: u64,
+    acked_count: u64,
+) {
+    let ts = trade_core::unix_ts_ns();
+    let mut envelope = EventEnvelope::new(
+        format!("projectiond-ingest-{source}-{ts}"),
+        source.to_string(),
+        ts as u64,
+        "state-projectiond-ingest",
+        DomainEvent::IngestDiagnosticRecorded(IngestDiagnosticRecorded {
+            source: source.to_string(),
+            stream: stream.map(str::to_string),
+            consumer: consumer.map(str::to_string),
+            subject: subject.map(str::to_string),
+            severity: severity.to_string(),
+            message: message.into(),
+            error_kind: error_kind.map(str::to_string),
+            reconnect,
+            decode_error,
+            filtered_count,
+            acked_count,
+        }),
+    );
+    envelope.stream = stream.unwrap_or_default().to_string();
+    envelope.subject = subject.unwrap_or_default().to_string();
+    apply_event(state, envelope);
+}
+
+fn build_snapshot(state: AppState, schema_version: String, source: String) -> ProjectionSnapshot {
     ProjectionSnapshot {
         schema_version,
         snapshot_ts_ns: state.connection.last_event_ts_ns.unwrap_or_default(),
-        source: "state-projectiond-jsonl".to_string(),
+        source,
         last_event_sequence: state.connection.last_event_sequence,
         account: Some(state.account),
         accounts: state.accounts.by_id.into_values().collect(),
+        market_data: state.market_data.by_symbol.into_values().collect(),
         strategies: state.strategies.by_id.into_values().collect(),
         orders: state.orders.by_correlation_id.into_values().collect(),
         positions: state.positions.by_key.into_values().collect(),
@@ -81,28 +455,38 @@ fn build_snapshot(state: AppState, schema_version: String) -> ProjectionSnapshot
     }
 }
 
-fn serve_projection(addr: &str, state: AppState, snapshot: ProjectionSnapshot) -> Result<()> {
+fn serve_projection(
+    addr: &str,
+    state: Arc<RwLock<AppState>>,
+    schema_version: String,
+) -> Result<()> {
     let listener = TcpListener::bind(addr)
         .with_context(|| format!("failed to bind state-projectiond on {addr}"))?;
     eprintln!("state-projectiond listening on {addr}");
     for stream in listener.incoming() {
         let stream = stream.context("failed to accept state-projectiond client")?;
-        handle_client(stream, &state, &snapshot)?;
+        handle_client(stream, state.clone(), schema_version.clone())?;
     }
     Ok(())
 }
 
 fn handle_client(
     mut stream: TcpStream,
-    state: &AppState,
-    snapshot: &ProjectionSnapshot,
+    state: Arc<RwLock<AppState>>,
+    schema_version: String,
 ) -> Result<()> {
     let peer = stream.peer_addr().ok();
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     while reader.read_line(&mut line)? != 0 {
         let response = match serde_json::from_str::<ProjectionQuery>(line.trim()) {
-            Ok(query) => query_projection(state, snapshot, query),
+            Ok(query) => {
+                let state = state.read().expect("state lock poisoned").clone();
+                let snapshot_source = state.connection.nats.clone();
+                let snapshot =
+                    build_snapshot(state.clone(), schema_version.clone(), snapshot_source);
+                query_projection(&state, &snapshot, query)
+            }
             Err(error) => ProjectionResponse::error("invalid_request", error.to_string()),
         };
         writeln!(stream, "{}", serde_json::to_string(&response)?)?;

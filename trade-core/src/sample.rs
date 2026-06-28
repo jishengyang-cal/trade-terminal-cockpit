@@ -1,7 +1,7 @@
 use crate::events::{
     AccountSnapshot, AlertRaised, BrokerAckReceived, DomainEvent, EventEnvelope, IntentCreated,
-    OrderFill, OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade,
-    RiskRuleEval, SignalGenerated, StrategyHealthUpdated, StrategyHeartbeat,
+    MarketDataSummary, OrderFill, OrderSubmitRequested, OrderSubmitted, PositionSnapshot,
+    RiskDecisionMade, RiskRuleEval, SignalGenerated, StrategyHealthUpdated, StrategyHeartbeat,
     StrategyPositionAttribution, StrategyRiskGateProjection,
 };
 use crate::{Money, Price};
@@ -25,6 +25,14 @@ pub fn sample_events() -> Vec<EventEnvelope> {
     vec![
         next(DomainEvent::AccountSnapshot(AccountSnapshot {
             account_id: "paper-main".to_string(),
+            canonical_account_id: Some("paper-main+paper".to_string()),
+            account_slot: Some(0),
+            endpoint_id: Some("ibkr-paper-main".to_string()),
+            client_id: Some(80),
+            gateway_tier: Some("paper".to_string()),
+            account_role: Some("data_and_trade".to_string()),
+            role_bits: Some(0b11),
+            readonly: Some(false),
             mode: Some("PAPER".to_string()),
             broker: Some("BROKER_SIM".to_string()),
             broker_connected: Some(true),
@@ -42,10 +50,25 @@ pub fn sample_events() -> Vec<EventEnvelope> {
             exposure_pct: Some(38.0),
             margin_usage_pct: Some(7.8),
             short_permission: Some(false),
+            margin_account: Some(true),
+            account_type: Some("margin".to_string()),
             short_intents_blocked_today: Some(17),
             day_trades_remaining: Some(3),
             pdt_status: Some("ok".to_string()),
             ..Default::default()
+        })),
+        next(DomainEvent::MarketDataSummary(MarketDataSummary {
+            symbol: "MU".to_string(),
+            source: Some("market-data-summary".to_string()),
+            bid_price: Some(Price::from_f64(123.44, "USD")),
+            ask_price: Some(Price::from_f64(123.45, "USD")),
+            spread_bps: Some(0.81),
+            imbalance: Some(0.41),
+            microprice: Some(Price::from_f64(123.446, "USD")),
+            quote_age_ms: Some(17),
+            event_rate_per_sec: Some(182.0),
+            wall_size: Some(750_000),
+            summary_ts_ns: Some(crate::unix_ts_ns()),
         })),
         next(DomainEvent::StrategyHeartbeat(StrategyHeartbeat {
             strategy_id: "open-scalp".to_string(),

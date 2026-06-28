@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -33,6 +33,9 @@ struct Cli {
 
     #[arg(long = "allow-capability", value_name = "CAPABILITY")]
     allow_capabilities: Vec<String>,
+
+    #[arg(long, value_name = "PATH")]
+    policy_json: Option<PathBuf>,
 
     #[arg(long)]
     execute_broker_control: bool,
@@ -75,13 +78,19 @@ fn main() -> Result<()> {
 
 fn process_command(command: CommandEnvelope, cli: &Cli) -> Result<GatewayResponse> {
     validate_command(&command)?;
-    let decision = decide(&command, cli.allow_dangerous, &cli.allow_capabilities)?;
+    let policy = load_policy(cli)?;
+    let decision = decide(
+        &command,
+        cli.allow_dangerous,
+        &cli.allow_capabilities,
+        policy.as_ref(),
+    )?;
     let decision = if decision.status == "accepted" {
         apply_external_risk_check(&command, decision, cli)?
     } else {
         decision
     };
-    let authority_event = EventEnvelope::new(
+    let mut authority_event = EventEnvelope::new(
         format!("authority-{}", command.command_id),
         command.correlation_id.clone(),
         0,
@@ -98,16 +107,20 @@ fn process_command(command: CommandEnvelope, cli: &Cli) -> Result<GatewayRespons
             scope: command.aggregate_id.clone(),
             approved_by: decision.approved_by.clone(),
             decided_ts_ns: trade_core::unix_ts_ns(),
-            authority_policy_version: command.authority_policy_version.clone(),
+            authority_policy_version: policy
+                .as_ref()
+                .map(|policy| policy.policy_version.clone())
+                .unwrap_or_else(|| command.authority_policy_version.clone()),
             target_environment: command.target_environment.clone(),
         }),
     );
+    stamp_command_event(&mut authority_event, &command, "authority");
     let (status, reason) = if decision.status == "accepted" {
         dispatch_command(&command, cli, &decision.reason)?
     } else {
         (decision.status, decision.reason)
     };
-    let audit_event = EventEnvelope::new(
+    let mut audit_event = EventEnvelope::new(
         format!("audit-{}", command.command_id),
         command.correlation_id.clone(),
         0,
@@ -121,6 +134,7 @@ fn process_command(command: CommandEnvelope, cli: &Cli) -> Result<GatewayRespons
             target: Some(command.aggregate_id.clone()),
         }),
     );
+    stamp_command_event(&mut audit_event, &command, "audit");
 
     append_audit_events(cli, [&authority_event, &audit_event])?;
     Ok(GatewayResponse {
@@ -129,6 +143,20 @@ fn process_command(command: CommandEnvelope, cli: &Cli) -> Result<GatewayRespons
         events: vec![authority_event, audit_event],
         error: None,
     })
+}
+
+fn stamp_command_event(envelope: &mut EventEnvelope, command: &CommandEnvelope, stage: &str) {
+    envelope.partition_key = command.aggregate_id.clone();
+    envelope.environment = command.target_environment.clone();
+    envelope.subject = format!(
+        "trading.command.{stage}.{}",
+        command.command_type.to_ascii_lowercase()
+    );
+    envelope.trace_id = Some(command.correlation_id.clone());
+    envelope.span_id = Some(format!("command-gateway.{stage}.{}", command.command_id));
+    if !command.command_hash.is_empty() {
+        envelope.checksum = Some(command.command_hash.clone());
+    }
 }
 
 fn append_audit_events<'a>(
@@ -213,6 +241,34 @@ struct AuthorityDecision {
     reason_codes: Vec<String>,
     matched_policy_ids: Vec<String>,
     approved_by: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct AuthorityPolicy {
+    #[serde(default = "default_policy_version")]
+    policy_version: String,
+    #[serde(default)]
+    allow_capabilities: Vec<String>,
+    #[serde(default)]
+    command_capabilities: BTreeMap<String, String>,
+    #[serde(default)]
+    sessions: Vec<OperatorSessionPolicy>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct OperatorSessionPolicy {
+    operator_id: String,
+    session_id: String,
+    #[serde(default)]
+    roles: Vec<String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default)]
+    target_environments: Vec<String>,
+    #[serde(default)]
+    allow_dangerous: bool,
+    #[serde(default)]
+    mfa_verified: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -684,7 +740,27 @@ fn validate_command(command: &CommandEnvelope) -> Result<()> {
     {
         bail!("command envelope missing operator/session/reason/capability/correlation fields");
     }
+    if let Some(expires_at_ns) = command.expires_at_ns {
+        if expires_at_ns <= trade_core::unix_ts_ns() {
+            bail!("command envelope expired before reaching command-gateway");
+        }
+    }
     Ok(())
+}
+
+fn load_policy(cli: &Cli) -> Result<Option<AuthorityPolicy>> {
+    let Some(path) = cli.policy_json.as_ref() else {
+        return Ok(None);
+    };
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let policy = serde_json::from_str::<AuthorityPolicy>(&content)
+        .with_context(|| format!("failed to decode {}", path.display()))?;
+    Ok(Some(policy))
+}
+
+fn default_policy_version() -> String {
+    "command-gateway.policy.v1".to_string()
 }
 
 fn command_event_status(event: &EventEnvelope) -> String {
@@ -699,13 +775,23 @@ fn decide(
     command: &CommandEnvelope,
     allow_dangerous: bool,
     allow_capabilities: &[String],
+    policy: Option<&AuthorityPolicy>,
 ) -> Result<AuthorityDecision> {
-    if let Some(reason) = capability_rejection_reason(command, allow_capabilities) {
+    if let Some(reason) = capability_rejection_reason(command, allow_capabilities, policy) {
         return Ok(AuthorityDecision {
             status: "rejected".to_string(),
             reason: reason.clone(),
             reason_codes: vec!["capability_rejected".to_string(), reason],
             matched_policy_ids: vec!["capability.required".to_string()],
+            approved_by: Vec::new(),
+        });
+    }
+    if let Some(reason) = policy_rejection_reason(command, policy) {
+        return Ok(AuthorityDecision {
+            status: "rejected".to_string(),
+            reason: reason.clone(),
+            reason_codes: vec!["policy_rejected".to_string(), reason],
+            matched_policy_ids: vec![policy_id(policy, "operator.session")],
             approved_by: Vec::new(),
         });
     }
@@ -718,22 +804,26 @@ fn decide(
             matched_policy_ids: vec![
                 "capability.required".to_string(),
                 "danger.controlled".to_string(),
+                policy_id(policy, "operator.session"),
             ],
-            approved_by: vec!["command-gateway".to_string()],
+            approved_by: approved_by(policy),
         }),
-        DangerLevel::Dangerous if allow_dangerous => Ok(AuthorityDecision {
-            status: "accepted".to_string(),
-            reason: "dangerous envelope accepted by explicit gateway flag".to_string(),
-            reason_codes: vec![
-                "capability_ok".to_string(),
-                "dangerous_explicitly_allowed".to_string(),
-            ],
-            matched_policy_ids: vec![
-                "capability.required".to_string(),
-                "danger.explicit_allow".to_string(),
-            ],
-            approved_by: vec!["command-gateway".to_string()],
-        }),
+        DangerLevel::Dangerous if dangerous_allowed(command, allow_dangerous, policy) => {
+            Ok(AuthorityDecision {
+                status: "accepted".to_string(),
+                reason: "dangerous envelope accepted by authority policy".to_string(),
+                reason_codes: vec![
+                    "capability_ok".to_string(),
+                    "dangerous_authority_allowed".to_string(),
+                ],
+                matched_policy_ids: vec![
+                    "capability.required".to_string(),
+                    "danger.explicit_allow".to_string(),
+                    policy_id(policy, "operator.session"),
+                ],
+                approved_by: approved_by(policy),
+            })
+        }
         DangerLevel::Dangerous => Ok(AuthorityDecision {
             status: "rejected".to_string(),
             reason: "dangerous envelope rejected by default authority policy".to_string(),
@@ -750,8 +840,16 @@ fn decide(
 fn capability_rejection_reason(
     command: &CommandEnvelope,
     allow_capabilities: &[String],
+    policy: Option<&AuthorityPolicy>,
 ) -> Option<String> {
-    let expected = expected_capability(command.command_type.as_str())?;
+    let expected = policy
+        .and_then(|policy| {
+            policy
+                .command_capabilities
+                .get(command.command_type.as_str())
+                .map(String::as_str)
+        })
+        .or_else(|| expected_capability(command.command_type.as_str()))?;
     if command.capability != expected {
         return Some(format!(
             "capability mismatch: expected {expected}, got {}",
@@ -771,8 +869,106 @@ fn capability_rejection_reason(
             ));
         }
     }
+    if let Some(policy) = policy {
+        let allowed = policy
+            .allow_capabilities
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if !allowed.is_empty() && !allowed.contains(command.capability.as_str()) {
+            return Some(format!(
+                "capability {} is not allowed by policy {}",
+                command.capability, policy.policy_version
+            ));
+        }
+    }
 
     None
+}
+
+fn policy_rejection_reason(
+    command: &CommandEnvelope,
+    policy: Option<&AuthorityPolicy>,
+) -> Option<String> {
+    let policy = policy?;
+    let Some(session) = matching_session(command, policy) else {
+        return Some(format!(
+            "no authority policy session for operator {} session {}",
+            command.operator_id, command.session_id
+        ));
+    };
+    if let Some(role) = command.requested_by_role.as_deref() {
+        if !session.roles.is_empty() && !session.roles.iter().any(|allowed| allowed == role) {
+            return Some(format!(
+                "operator {} session {} lacks requested role {}",
+                command.operator_id, command.session_id, role
+            ));
+        }
+    }
+    if !session.capabilities.is_empty()
+        && !session
+            .capabilities
+            .iter()
+            .any(|capability| capability == &command.capability)
+    {
+        return Some(format!(
+            "operator {} session {} lacks capability {}",
+            command.operator_id, command.session_id, command.capability
+        ));
+    }
+    if !session.target_environments.is_empty()
+        && !session
+            .target_environments
+            .iter()
+            .any(|environment| environment == &command.target_environment)
+    {
+        return Some(format!(
+            "operator {} session {} cannot target environment {}",
+            command.operator_id, command.session_id, command.target_environment
+        ));
+    }
+    if command.requires_mfa && !session.mfa_verified {
+        return Some(format!(
+            "operator {} session {} has no verified MFA for command {}",
+            command.operator_id, command.session_id, command.command_id
+        ));
+    }
+    None
+}
+
+fn matching_session<'a>(
+    command: &CommandEnvelope,
+    policy: &'a AuthorityPolicy,
+) -> Option<&'a OperatorSessionPolicy> {
+    policy.sessions.iter().find(|session| {
+        session.operator_id == command.operator_id && session.session_id == command.session_id
+    })
+}
+
+fn dangerous_allowed(
+    command: &CommandEnvelope,
+    allow_dangerous: bool,
+    policy: Option<&AuthorityPolicy>,
+) -> bool {
+    if allow_dangerous && policy.is_none() {
+        return true;
+    }
+    policy
+        .and_then(|policy| matching_session(command, policy))
+        .map(|session| session.allow_dangerous)
+        .unwrap_or(false)
+}
+
+fn policy_id(policy: Option<&AuthorityPolicy>, suffix: &str) -> String {
+    policy
+        .map(|policy| format!("{}:{suffix}", policy.policy_version))
+        .unwrap_or_else(|| suffix.to_string())
+}
+
+fn approved_by(policy: Option<&AuthorityPolicy>) -> Vec<String> {
+    policy
+        .map(|policy| vec![format!("command-gateway/{}", policy.policy_version)])
+        .unwrap_or_else(|| vec!["command-gateway".to_string()])
 }
 
 fn expected_capability(command_type: &str) -> Option<&'static str> {
@@ -951,12 +1147,84 @@ mod tests {
             "account.kill",
         );
 
-        let decision = decide(&command, false, &[]).expect("decision should succeed");
+        let decision = decide(&command, false, &[], None).expect("decision should succeed");
 
         assert_eq!(decision.status, "rejected");
         assert!(decision.reason.contains("dangerous envelope rejected"));
         assert!(decision
             .reason_codes
             .contains(&"dangerous_rejected_by_default".to_string()));
+    }
+
+    fn policy() -> AuthorityPolicy {
+        AuthorityPolicy {
+            policy_version: "policy-test".to_string(),
+            allow_capabilities: vec!["strategy.control".to_string(), "account.kill".to_string()],
+            command_capabilities: BTreeMap::new(),
+            sessions: vec![OperatorSessionPolicy {
+                operator_id: "operator-test".to_string(),
+                session_id: "session-test".to_string(),
+                roles: vec!["trader".to_string()],
+                capabilities: vec!["strategy.control".to_string()],
+                target_environments: vec!["paper".to_string()],
+                allow_dangerous: false,
+                mfa_verified: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn policy_accepts_matching_controlled_command() {
+        let mut command = command(
+            CommandPayload::PauseStrategyRequested {
+                strategy_id: "open-scalp".to_string(),
+            },
+            "strategy.control",
+        );
+        command.target_environment = "paper".to_string();
+        command.requested_by_role = Some("trader".to_string());
+        let policy = policy();
+
+        let decision =
+            decide(&command, false, &[], Some(&policy)).expect("decision should succeed");
+
+        assert_eq!(decision.status, "accepted");
+        assert!(decision
+            .matched_policy_ids
+            .iter()
+            .any(|policy_id| policy_id == "policy-test:operator.session"));
+    }
+
+    #[test]
+    fn policy_rejects_unknown_session() {
+        let mut command = command(
+            CommandPayload::PauseStrategyRequested {
+                strategy_id: "open-scalp".to_string(),
+            },
+            "strategy.control",
+        );
+        command.session_id = "unknown-session".to_string();
+        let policy = policy();
+
+        let decision =
+            decide(&command, false, &[], Some(&policy)).expect("decision should succeed");
+
+        assert_eq!(decision.status, "rejected");
+        assert!(decision.reason.contains("no authority policy session"));
+    }
+
+    #[test]
+    fn policy_rejects_dangerous_without_session_grant() {
+        let command = command(
+            CommandPayload::GlobalKillSwitchRequested {
+                account_id: "global".to_string(),
+            },
+            "account.kill",
+        );
+        let policy = policy();
+
+        let decision = decide(&command, true, &[], Some(&policy)).expect("decision should succeed");
+
+        assert_eq!(decision.status, "rejected");
     }
 }

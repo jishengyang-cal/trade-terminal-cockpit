@@ -11,6 +11,8 @@ pub struct AppState {
     pub accounts: AccountStore,
     #[serde(default)]
     pub commands: CommandStore,
+    #[serde(default)]
+    pub market_data: MarketDataStore,
     pub strategies: StrategyStore,
     pub orders: OrderStore,
     pub positions: PositionStore,
@@ -30,6 +32,7 @@ impl Default for AppState {
             account: AccountView::default(),
             accounts: AccountStore::default(),
             commands: CommandStore::default(),
+            market_data: MarketDataStore::default(),
             strategies: StrategyStore::default(),
             orders: OrderStore::default(),
             positions: PositionStore::default(),
@@ -155,6 +158,24 @@ impl Default for ConnectionState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AccountView {
     pub account_id: String,
+    #[serde(default)]
+    pub canonical_account_id: Option<String>,
+    #[serde(default)]
+    pub account_slot: Option<u8>,
+    #[serde(default)]
+    pub account_id_hash_hex: Option<String>,
+    #[serde(default)]
+    pub endpoint_id: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<i32>,
+    #[serde(default)]
+    pub gateway_tier: Option<String>,
+    #[serde(default)]
+    pub account_role: Option<String>,
+    #[serde(default)]
+    pub role_bits: Option<u8>,
+    #[serde(default)]
+    pub readonly: Option<bool>,
     pub mode: String,
     pub broker: String,
     pub broker_connected: bool,
@@ -176,6 +197,10 @@ pub struct AccountView {
     pub exposure_pct: f64,
     pub margin_usage_pct: f64,
     pub short_permission: bool,
+    #[serde(default)]
+    pub margin_account: Option<bool>,
+    #[serde(default)]
+    pub account_type: Option<String>,
     pub short_intents_blocked_today: u64,
     #[serde(default)]
     pub runtime_controls: AccountRuntimeControls,
@@ -225,6 +250,15 @@ impl AccountView {
     pub fn new(account_id: &str) -> Self {
         Self {
             account_id: account_id.to_string(),
+            canonical_account_id: None,
+            account_slot: None,
+            account_id_hash_hex: None,
+            endpoint_id: None,
+            client_id: None,
+            gateway_tier: None,
+            account_role: None,
+            role_bits: None,
+            readonly: None,
             mode: "PAPER".to_string(),
             broker: "unknown".to_string(),
             broker_connected: false,
@@ -241,6 +275,8 @@ impl AccountView {
             exposure_pct: 0.0,
             margin_usage_pct: 0.0,
             short_permission: false,
+            margin_account: None,
+            account_type: None,
             short_intents_blocked_today: 0,
             runtime_controls: AccountRuntimeControls::default(),
             account_currency: "USD".to_string(),
@@ -283,6 +319,119 @@ impl AccountView {
         self.realized_pnl = self.realized_pnl_value.as_f64();
         self.unrealized_pnl = self.unrealized_pnl_value.as_f64();
     }
+
+    pub fn refresh_ocam_authority_mapping(&mut self) {
+        if self.gateway_tier.is_none() {
+            self.gateway_tier = gateway_tier_from_mode(&self.mode);
+        }
+        if self.role_bits.is_none() {
+            self.role_bits = self.account_role.as_deref().and_then(role_bits_from_role);
+        }
+        if self.account_role.is_none() {
+            self.account_role = self.role_bits.and_then(role_from_role_bits);
+        }
+        if self.canonical_account_id.is_none() {
+            if let Some(tier) = self
+                .gateway_tier
+                .as_deref()
+                .and_then(normalize_gateway_tier)
+            {
+                self.canonical_account_id = Some(format!("{}+{}", self.account_id, tier));
+            }
+        }
+        if self.account_id_hash_hex.is_none() {
+            if let Some(identity) = self.canonical_account_id.as_deref() {
+                self.account_id_hash_hex = Some(format!("0x{:016x}", fnv1a_64(identity)));
+            }
+        }
+    }
+
+    pub fn short_permission_label(&self) -> &'static str {
+        if self.short_permission {
+            "CAN_SHORT"
+        } else {
+            "NO_SHORT"
+        }
+    }
+
+    pub fn margin_permission_label(&self) -> &'static str {
+        match self.margin_account {
+            Some(true) => "MARGIN",
+            Some(false) => "CASH",
+            None => match self
+                .account_type
+                .as_deref()
+                .map(|value| value.to_ascii_lowercase())
+            {
+                Some(value) if value.contains("margin") => "MARGIN",
+                Some(value) if value.contains("cash") => "CASH",
+                _ => "UNKNOWN",
+            },
+        }
+    }
+
+    pub fn mutation_permission_label(&self) -> &'static str {
+        match (self.role_bits.unwrap_or(0) & 0b10 != 0, self.readonly) {
+            (true, Some(false)) => "TRADE",
+            (true, Some(true)) => "READONLY",
+            (true, None) => "TRADE?",
+            (false, _) => "NO_TRADE",
+        }
+    }
+
+    pub fn permission_summary(&self) -> String {
+        format!(
+            "{}/{}/{}",
+            self.short_permission_label(),
+            self.margin_permission_label(),
+            self.mutation_permission_label()
+        )
+    }
+}
+
+fn gateway_tier_from_mode(mode: &str) -> Option<String> {
+    match mode.to_ascii_lowercase().as_str() {
+        "paper" | "account_mode_paper" => Some("paper".to_string()),
+        "live" | "account_mode_live" => Some("live".to_string()),
+        "replay" | "account_mode_replay" => Some("replay".to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_gateway_tier(value: &str) -> Option<&'static str> {
+    match value.to_ascii_lowercase().as_str() {
+        "paper" | "account_mode_paper" => Some("paper"),
+        "live" | "account_mode_live" => Some("live"),
+        "replay" | "account_mode_replay" => Some("replay"),
+        _ => None,
+    }
+}
+
+fn role_bits_from_role(value: &str) -> Option<u8> {
+    match value.to_ascii_lowercase().replace('-', "_").as_str() {
+        "data_only" | "data" => Some(0b01),
+        "trade_only" | "trade" => Some(0b10),
+        "data_and_trade" | "data_trade" | "data+trade" | "both" => Some(0b11),
+        _ => None,
+    }
+}
+
+fn role_from_role_bits(value: u8) -> Option<String> {
+    match value {
+        0b01 => Some("data_only".to_string()),
+        0b10 => Some("trade_only".to_string()),
+        0b11 => Some("data_and_trade".to_string()),
+        _ => None,
+    }
+}
+
+fn fnv1a_64(value: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -341,6 +490,39 @@ impl AccountStore {
 
         let mut aggregate = AccountView::new(&format!("ALL({})", self.by_id.len()));
         aggregate.mode = "MULTI".to_string();
+        aggregate.gateway_tier = common_optional_string(
+            self.by_id
+                .values()
+                .filter_map(|account| account.gateway_tier.as_deref()),
+        )
+        .or_else(|| Some("mixed".to_string()));
+        aggregate.account_role = common_optional_string(
+            self.by_id
+                .values()
+                .filter_map(|account| account.account_role.as_deref()),
+        )
+        .or_else(|| Some("mixed".to_string()));
+        aggregate.role_bits =
+            common_optional_u8(self.by_id.values().filter_map(|account| account.role_bits));
+        aggregate.readonly =
+            common_optional_bool(self.by_id.values().filter_map(|account| account.readonly));
+        aggregate.margin_account = common_optional_bool(
+            self.by_id
+                .values()
+                .filter_map(|account| account.margin_account),
+        );
+        aggregate.account_type = common_optional_string(
+            self.by_id
+                .values()
+                .filter_map(|account| account.account_type.as_deref()),
+        )
+        .or_else(|| {
+            if aggregate.margin_account.is_none() {
+                Some("mixed".to_string())
+            } else {
+                None
+            }
+        });
         aggregate.broker = "mixed".to_string();
         aggregate.broker_connected = self.by_id.values().all(|account| account.broker_connected);
         aggregate.cash = self.by_id.values().map(|account| account.cash).sum();
@@ -520,6 +702,68 @@ fn common_currency<'a>(accounts: impl IntoIterator<Item = &'a AccountView>) -> O
         }
     }
     currency
+}
+
+fn common_optional_string<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let mut common = None::<String>;
+    for value in values {
+        match common.as_deref() {
+            None => common = Some(value.to_string()),
+            Some(existing) if existing == value => {}
+            Some(_) => return None,
+        }
+    }
+    common
+}
+
+fn common_optional_bool(values: impl IntoIterator<Item = bool>) -> Option<bool> {
+    let mut common = None::<bool>;
+    for value in values {
+        match common {
+            None => common = Some(value),
+            Some(existing) if existing == value => {}
+            Some(_) => return None,
+        }
+    }
+    common
+}
+
+fn common_optional_u8(values: impl IntoIterator<Item = u8>) -> Option<u8> {
+    let mut common = None::<u8>;
+    for value in values {
+        match common {
+            None => common = Some(value),
+            Some(existing) if existing == value => {}
+            Some(_) => return None,
+        }
+    }
+    common
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketDataStore {
+    pub by_symbol: BTreeMap<String, MarketDataSummaryView>,
+}
+
+impl MarketDataStore {
+    pub fn upsert(&mut self, summary: MarketDataSummaryView) {
+        self.by_symbol.insert(summary.symbol.clone(), summary);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarketDataSummaryView {
+    pub symbol: String,
+    pub source: Option<String>,
+    pub bid_price: Option<Price>,
+    pub ask_price: Option<Price>,
+    pub spread_bps: Option<f64>,
+    pub imbalance: Option<f64>,
+    pub microprice: Option<Price>,
+    pub quote_age_ms: Option<u64>,
+    pub event_rate_per_sec: Option<f64>,
+    pub wall_size: Option<i64>,
+    pub summary_ts_ns: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1190,13 +1434,38 @@ impl Default for EventRingBuffer {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EventSummary {
+    pub event_id: String,
     pub sequence: u64,
     pub ts_ns: i64,
+    #[serde(default)]
+    pub source_ts_ns: i64,
+    #[serde(default)]
+    pub ingest_ts_ns: i64,
+    #[serde(default)]
+    pub publish_ts_ns: i64,
     pub event_type: String,
     pub aggregate_type: String,
     pub aggregate_id: String,
     pub correlation_id: String,
+    #[serde(default)]
+    pub causation_id: String,
     pub producer: String,
+    #[serde(default)]
+    pub schema_version: String,
+    #[serde(default)]
+    pub stream: String,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub partition_key: String,
+    #[serde(default)]
+    pub environment: String,
+    #[serde(default)]
+    pub trace_id: Option<String>,
+    #[serde(default)]
+    pub span_id: Option<String>,
+    #[serde(default)]
+    pub checksum: Option<String>,
     pub headline: String,
     #[serde(default)]
     pub payload_json: Option<String>,

@@ -1745,9 +1745,12 @@ name = "state-projectiond"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-nats",
  "clap",
+ "futures-util",
  "serde",
  "serde_json",
+ "tokio",
  "trade-core",
 ]
 
@@ -2076,12 +2079,14 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
+ "prost",
  "ratatui",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "trade-contracts",
  "trade-core",
 ]
 

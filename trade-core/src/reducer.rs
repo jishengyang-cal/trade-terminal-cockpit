@@ -6,8 +6,8 @@ use crate::events::{
     SignalGenerated, StrategyHealthUpdated, StrategyHeartbeat, StrategyStateChanged,
 };
 use crate::state::{
-    AlertView, AppState, EventSummary, OrderLifecycleState, PositionView, RiskBlock,
-    RiskDecisionView, RiskLimitView, StrategyPositionView,
+    AlertView, AppState, EventSummary, MarketDataSummaryView, OrderLifecycleState, PositionView,
+    RiskBlock, RiskDecisionView, RiskLimitView, StrategyPositionView,
 };
 
 pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
@@ -62,6 +62,21 @@ pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
     match envelope.payload {
         DomainEvent::AccountSnapshot(event) => {
             reduce_account_snapshot(state, event);
+        }
+        DomainEvent::MarketDataSummary(event) => {
+            state.market_data.upsert(MarketDataSummaryView {
+                symbol: event.symbol,
+                source: event.source,
+                bid_price: event.bid_price,
+                ask_price: event.ask_price,
+                spread_bps: event.spread_bps,
+                imbalance: event.imbalance,
+                microprice: event.microprice,
+                quote_age_ms: event.quote_age_ms,
+                event_rate_per_sec: event.event_rate_per_sec,
+                wall_size: event.wall_size,
+                summary_ts_ns: event.summary_ts_ns,
+            });
         }
         DomainEvent::StrategyHeartbeat(event) => {
             reduce_strategy_heartbeat(state, sequence, event);
@@ -128,6 +143,7 @@ fn is_coalescible_projection_event(event: &DomainEvent) -> bool {
     matches!(
         event,
         DomainEvent::AccountSnapshot(_)
+            | DomainEvent::MarketDataSummary(_)
             | DomainEvent::StrategyHeartbeat(_)
             | DomainEvent::StrategyHealthUpdated(_)
             | DomainEvent::PositionSnapshot(_)
@@ -137,6 +153,33 @@ fn is_coalescible_projection_event(event: &DomainEvent) -> bool {
 
 fn reduce_account_snapshot(state: &mut AppState, event: AccountSnapshot) {
     let account = state.accounts.get_or_insert(&event.account_id);
+    if event.canonical_account_id.is_some() {
+        account.canonical_account_id = event.canonical_account_id;
+    }
+    if let Some(value) = event.account_slot {
+        account.account_slot = Some(value);
+    }
+    if event.account_id_hash_hex.is_some() {
+        account.account_id_hash_hex = event.account_id_hash_hex;
+    }
+    if event.endpoint_id.is_some() {
+        account.endpoint_id = event.endpoint_id;
+    }
+    if let Some(value) = event.client_id {
+        account.client_id = Some(value);
+    }
+    if event.gateway_tier.is_some() {
+        account.gateway_tier = event.gateway_tier;
+    }
+    if event.account_role.is_some() {
+        account.account_role = event.account_role;
+    }
+    if let Some(value) = event.role_bits {
+        account.role_bits = Some(value);
+    }
+    if let Some(value) = event.readonly {
+        account.readonly = Some(value);
+    }
     if let Some(mode) = event.mode {
         account.mode = mode;
     }
@@ -221,9 +264,16 @@ fn reduce_account_snapshot(state: &mut AppState, event: AccountSnapshot) {
     if let Some(value) = event.short_permission {
         account.short_permission = value;
     }
+    if let Some(value) = event.margin_account {
+        account.margin_account = Some(value);
+    }
+    if event.account_type.is_some() {
+        account.account_type = event.account_type;
+    }
     if let Some(value) = event.short_intents_blocked_today {
         account.short_intents_blocked_today = value;
     }
+    account.refresh_ocam_authority_mapping();
     account.sync_legacy_f64_from_money();
     refresh_account_aggregate(state);
 }
@@ -1026,13 +1076,26 @@ fn upsert_risk_block(state: &mut AppState, mut next: RiskBlock) {
 
 fn summarize(envelope: &EventEnvelope) -> EventSummary {
     EventSummary {
+        event_id: envelope.event_id.clone(),
         sequence: envelope.sequence,
         ts_ns: envelope.publish_ts_ns,
+        source_ts_ns: envelope.source_ts_ns,
+        ingest_ts_ns: envelope.ingest_ts_ns,
+        publish_ts_ns: envelope.publish_ts_ns,
         event_type: envelope.event_type.clone(),
         aggregate_type: envelope.aggregate_type.clone(),
         aggregate_id: envelope.aggregate_id.clone(),
         correlation_id: envelope.correlation_id.clone(),
+        causation_id: envelope.causation_id.clone(),
         producer: envelope.producer.clone(),
+        schema_version: envelope.schema_version.clone(),
+        stream: envelope.stream.clone(),
+        subject: envelope.subject.clone(),
+        partition_key: envelope.partition_key.clone(),
+        environment: envelope.environment.clone(),
+        trace_id: envelope.trace_id.clone(),
+        span_id: envelope.span_id.clone(),
+        checksum: envelope.checksum.clone(),
         headline: headline(&envelope.payload),
         payload_json: serde_json::to_string(&envelope.payload).ok(),
     }
@@ -1052,6 +1115,17 @@ fn headline(event: &DomainEvent) -> String {
                 event.account_id,
                 event.mode.as_deref().unwrap_or("-")
             )
+        }
+        DomainEvent::MarketDataSummary(event) => {
+            let quote_age = event
+                .quote_age_ms
+                .map(|value| format!(" age={value}ms"))
+                .unwrap_or_default();
+            let imbalance = event
+                .imbalance
+                .map(|value| format!(" imb={value:.2}"))
+                .unwrap_or_default();
+            format!("md {}{}{}", event.symbol, quote_age, imbalance)
         }
         DomainEvent::StrategyHealthUpdated(event) => {
             format!("strategy health {}", event.strategy_id)

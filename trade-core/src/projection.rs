@@ -1,5 +1,6 @@
 use crate::state::{
-    AccountView, AlertView, AppState, OrderChain, PositionView, RiskView, StrategyView,
+    AccountView, AlertView, AppState, MarketDataSummaryView, OrderChain, PositionView, RiskView,
+    StrategyView,
 };
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +13,8 @@ pub struct ProjectionSnapshot {
     pub account: Option<AccountView>,
     #[serde(default)]
     pub accounts: Vec<AccountView>,
+    #[serde(default)]
+    pub market_data: Vec<MarketDataSummaryView>,
     pub strategies: Vec<StrategyView>,
     pub orders: Vec<OrderChain>,
     pub positions: Vec<PositionView>,
@@ -22,16 +25,25 @@ pub struct ProjectionSnapshot {
 pub fn apply_projection_snapshot(state: &mut AppState, snapshot: ProjectionSnapshot) {
     state.accounts.by_id.clear();
     if let Some(account) = snapshot.account {
+        let mut account = account;
+        account.refresh_ocam_authority_mapping();
         state
             .accounts
             .by_id
             .insert(account.account_id.clone(), account);
     }
     for account in snapshot.accounts {
+        let mut account = account;
+        account.refresh_ocam_authority_mapping();
         state
             .accounts
             .by_id
             .insert(account.account_id.clone(), account);
+    }
+
+    state.market_data.by_symbol.clear();
+    for summary in snapshot.market_data {
+        state.market_data.upsert(summary);
     }
 
     state.strategies.by_id.clear();

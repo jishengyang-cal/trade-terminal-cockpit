@@ -37,6 +37,9 @@ pub struct Cli {
     #[arg(long = "nats-subject", value_name = "SUBJECT", requires = "nats_url")]
     pub nats_subjects: Vec<String>,
 
+    #[arg(long, default_value = "json", value_parser = ["json", "protobuf"])]
+    pub event_codec: String,
+
     #[arg(long, value_name = "STREAM", requires = "nats_url")]
     pub jetstream_stream: Option<String>,
 

@@ -85,6 +85,17 @@ mod tests {
             margin_usage_pct: Some(7.8),
             short_permission: Some(false),
             short_intents_blocked_today: Some(17),
+            canonical_account_id: "paper-main+paper".to_string(),
+            account_slot: Some(0),
+            account_id_hash_hex: "0x0f3406d4a9b7b70c".to_string(),
+            endpoint_id: "ibkr-paper-main".to_string(),
+            client_id: Some(80),
+            gateway_tier: "paper".to_string(),
+            account_role: "data_and_trade".to_string(),
+            role_bits: Some(3),
+            readonly: Some(false),
+            margin_account: Some(true),
+            account_type: "margin".to_string(),
         };
 
         let mut bytes = Vec::new();

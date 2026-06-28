@@ -11,6 +11,25 @@ fn projection_snapshot_initializes_trade_cockpit_state() {
     apply_projection_snapshot(&mut state, sample_snapshot());
 
     assert_eq!(state.account.account_id, "paper-main");
+    assert_eq!(
+        state.account.canonical_account_id.as_deref(),
+        Some("paper-main+paper")
+    );
+    assert_eq!(state.account.account_slot, Some(0));
+    assert_eq!(state.account.gateway_tier.as_deref(), Some("paper"));
+    assert_eq!(
+        state.account.account_role.as_deref(),
+        Some("data_and_trade")
+    );
+    assert_eq!(state.account.role_bits, Some(0b11));
+    assert_eq!(state.account.readonly, Some(false));
+    assert_eq!(state.account.margin_account, Some(true));
+    assert!(state
+        .account
+        .account_id_hash_hex
+        .as_deref()
+        .unwrap()
+        .starts_with("0x"));
     assert_eq!(state.accounts.by_id.len(), 1);
     assert!(state.accounts.by_id.contains_key("paper-main"));
     assert_eq!(state.strategies.by_id.len(), 1);
@@ -83,6 +102,14 @@ fn sample_snapshot() -> ProjectionSnapshot {
         last_event_sequence: Some(41),
         account: Some(AccountView {
             account_id: "paper-main".to_string(),
+            canonical_account_id: Some("paper-main+paper".to_string()),
+            account_slot: Some(0),
+            endpoint_id: Some("ibkr-paper-main".to_string()),
+            client_id: Some(80),
+            gateway_tier: Some("paper".to_string()),
+            account_role: Some("data_and_trade".to_string()),
+            role_bits: Some(0b11),
+            readonly: Some(false),
             mode: "PAPER".to_string(),
             broker: "BROKER_SIM".to_string(),
             broker_connected: true,
@@ -94,11 +121,14 @@ fn sample_snapshot() -> ProjectionSnapshot {
             exposure_pct: 5.0,
             margin_usage_pct: 1.0,
             short_permission: false,
+            margin_account: Some(true),
+            account_type: Some("margin".to_string()),
             short_intents_blocked_today: 2,
             runtime_controls: Default::default(),
             ..AccountView::new("paper-main")
         }),
         accounts: Vec::new(),
+        market_data: Vec::new(),
         strategies: vec![sample_strategy()],
         orders: vec![chain],
         positions: vec![PositionView {

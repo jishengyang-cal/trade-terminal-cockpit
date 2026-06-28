@@ -86,6 +86,7 @@ impl EventEnvelope {
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum DomainEvent {
     AccountSnapshot(AccountSnapshot),
+    MarketDataSummary(MarketDataSummary),
     StrategyHeartbeat(StrategyHeartbeat),
     StrategyHealthUpdated(StrategyHealthUpdated),
     StrategyStateChanged(StrategyStateChanged),
@@ -114,6 +115,7 @@ impl DomainEvent {
     pub fn event_type(&self) -> &'static str {
         match self {
             Self::AccountSnapshot(_) => "AccountSnapshot",
+            Self::MarketDataSummary(_) => "MarketDataSummary",
             Self::StrategyHeartbeat(_) => "StrategyHeartbeat",
             Self::StrategyHealthUpdated(_) => "StrategyHealthUpdated",
             Self::StrategyStateChanged(_) => "StrategyStateChanged",
@@ -142,6 +144,7 @@ impl DomainEvent {
     pub fn aggregate_type(&self) -> &'static str {
         match self {
             Self::AccountSnapshot(_) => "account",
+            Self::MarketDataSummary(_) => "market_data",
             Self::StrategyHeartbeat(_)
             | Self::StrategyHealthUpdated(_)
             | Self::StrategyStateChanged(_) => "strategy",
@@ -168,6 +171,7 @@ impl DomainEvent {
     pub fn aggregate_id(&self) -> String {
         match self {
             Self::AccountSnapshot(event) => event.account_id.clone(),
+            Self::MarketDataSummary(event) => event.symbol.clone(),
             Self::StrategyHeartbeat(event) => event.strategy_id.clone(),
             Self::StrategyHealthUpdated(event) => event.strategy_id.clone(),
             Self::StrategyStateChanged(event) => event.strategy_id.clone(),
@@ -200,8 +204,51 @@ impl DomainEvent {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarketDataSummary {
+    pub symbol: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub bid_price: Option<Price>,
+    #[serde(default)]
+    pub ask_price: Option<Price>,
+    #[serde(default)]
+    pub spread_bps: Option<f64>,
+    #[serde(default)]
+    pub imbalance: Option<f64>,
+    #[serde(default)]
+    pub microprice: Option<Price>,
+    #[serde(default)]
+    pub quote_age_ms: Option<u64>,
+    #[serde(default)]
+    pub event_rate_per_sec: Option<f64>,
+    #[serde(default)]
+    pub wall_size: Option<i64>,
+    #[serde(default)]
+    pub summary_ts_ns: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AccountSnapshot {
     pub account_id: String,
+    #[serde(default)]
+    pub canonical_account_id: Option<String>,
+    #[serde(default)]
+    pub account_slot: Option<u8>,
+    #[serde(default)]
+    pub account_id_hash_hex: Option<String>,
+    #[serde(default)]
+    pub endpoint_id: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<i32>,
+    #[serde(default)]
+    pub gateway_tier: Option<String>,
+    #[serde(default)]
+    pub account_role: Option<String>,
+    #[serde(default)]
+    pub role_bits: Option<u8>,
+    #[serde(default)]
+    pub readonly: Option<bool>,
     #[serde(default)]
     pub mode: Option<String>,
     #[serde(default)]
@@ -258,6 +305,10 @@ pub struct AccountSnapshot {
     pub margin_usage_pct: Option<f64>,
     #[serde(default)]
     pub short_permission: Option<bool>,
+    #[serde(default)]
+    pub margin_account: Option<bool>,
+    #[serde(default)]
+    pub account_type: Option<String>,
     #[serde(default)]
     pub short_intents_blocked_today: Option<u64>,
 }

@@ -1,4 +1,5 @@
 use crate::cli::Cli;
+use crate::event_codec::{decode_event_envelope, EventCodec};
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use std::fs::{self, File};
@@ -119,6 +120,7 @@ pub fn spawn_event_sources(
 
     let (tx, rx) = mpsc::channel();
     let mut spawned = false;
+    let event_codec = cli.event_codec.parse::<EventCodec>()?;
 
     if cli.follow {
         spawn_jsonl_follow(cli, filter.clone(), tx.clone())?;
@@ -135,6 +137,7 @@ pub fn spawn_event_sources(
                 stream.to_string(),
                 durable.to_string(),
                 cli.nats_subjects.clone(),
+                event_codec,
                 filter.clone(),
                 tx.clone(),
             )?;
@@ -146,7 +149,13 @@ pub fn spawn_event_sources(
 
         if !using_jetstream {
             for subject in &cli.nats_subjects {
-                spawn_nats_subject(url.to_string(), subject.clone(), filter.clone(), tx.clone())?;
+                spawn_nats_subject(
+                    url.to_string(),
+                    subject.clone(),
+                    event_codec,
+                    filter.clone(),
+                    tx.clone(),
+                )?;
                 spawned = true;
             }
         }
@@ -164,6 +173,7 @@ fn spawn_jetstream_consumer(
     stream_name: String,
     durable_name: String,
     subjects: Vec<String>,
+    event_codec: EventCodec,
     filter: EventFilter,
     tx: Sender<EventEnvelope>,
 ) -> Result<()> {
@@ -202,6 +212,7 @@ fn spawn_jetstream_consumer(
                         &stream_name,
                         &durable_name,
                         &subjects,
+                        event_codec,
                         &filter,
                         &tx,
                     )
@@ -236,6 +247,7 @@ async fn run_jetstream_consumer_once(
     stream_name: &str,
     durable_name: &str,
     subjects: &[String],
+    event_codec: EventCodec,
     filter: &EventFilter,
     tx: &Sender<EventEnvelope>,
 ) -> Result<()> {
@@ -277,7 +289,7 @@ async fn run_jetstream_consumer_once(
     let mut messages = consumer.messages().await?;
     while let Some(message) = messages.next().await {
         let message = message?;
-        match serde_json::from_slice::<EventEnvelope>(message.payload.as_ref()) {
+        match decode_event_envelope(message.payload.as_ref(), event_codec) {
             Ok(mut event) => {
                 stamp_ingested_event(&mut event, Some(stream_name), Some(&filter_subject));
                 if filter.matches(&event) {
@@ -312,7 +324,10 @@ async fn run_jetstream_consumer_once(
                     Some(durable_name),
                     Some(&filter_subject),
                     "error",
-                    format!("failed to decode {stream_name}: {error}"),
+                    format!(
+                        "failed to decode {stream_name} with {:?}: {error}",
+                        event_codec
+                    ),
                     Some("decode"),
                     false,
                     true,
@@ -454,6 +469,7 @@ fn spawn_jsonl_follow(cli: &Cli, filter: EventFilter, tx: Sender<EventEnvelope>)
 fn spawn_nats_subject(
     url: String,
     subject: String,
+    event_codec: EventCodec,
     filter: EventFilter,
     tx: Sender<EventEnvelope>,
 ) -> Result<()> {
@@ -505,8 +521,9 @@ fn spawn_nats_subject(
                                     0,
                                 );
                                 while let Some(message) = subscriber.next().await {
-                                    match serde_json::from_slice::<EventEnvelope>(
+                                    match decode_event_envelope(
                                         message.payload.as_ref(),
+                                        event_codec,
                                     ) {
                                         Ok(mut event) => {
                                             stamp_ingested_event(&mut event, None, Some(&subject));
@@ -539,7 +556,10 @@ fn spawn_nats_subject(
                                                 None,
                                                 Some(&subject),
                                                 "error",
-                                                format!("failed to decode {subject}: {error}"),
+                                                format!(
+                                                    "failed to decode {subject} with {:?}: {error}",
+                                                    event_codec
+                                                ),
                                                 Some("decode"),
                                                 false,
                                                 true,

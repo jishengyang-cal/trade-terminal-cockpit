@@ -54,7 +54,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         Screen::Overview => render_overview(frame, chunks[2], app),
         Screen::Strategies => render_strategies(frame, chunks[2], app),
         Screen::Orders => render_orders(frame, chunks[2], app),
-        Screen::Positions => render_positions(frame, chunks[2], &app.state),
+        Screen::Positions => render_positions(frame, chunks[2], app),
         Screen::Risk => render_risk(frame, chunks[2], app),
         Screen::Events => render_events(frame, chunks[2], app),
         Screen::Replay => render_replay(frame, chunks[2], app),
@@ -124,8 +124,8 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .split(area);
 
     let mut accounts = vec![format!(
-        "  {:<14} {:<6} {:<8} {:>9} {:>6} {}",
-        "ACCOUNT", "MODE", "BROKER", "DAY_PNL", "EXP", "CTRL"
+        "  {:<14} {:<6} {:<8} {:<24} {:>9} {:>6} {}",
+        "ACCOUNT", "MODE", "BROKER", "PERMISSIONS", "DAY_PNL", "EXP", "CTRL"
     )];
     for (index, account) in state.accounts.by_id.values().enumerate() {
         accounts.push(format_account_row(
@@ -138,7 +138,52 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let selected_account = selected_account(state, app.selected_account_index);
     let account_detail = vec![
         kv("account", &selected_account.account_id),
+        kv(
+            "canonical",
+            selected_account
+                .canonical_account_id
+                .as_deref()
+                .unwrap_or("-"),
+        ),
+        kv(
+            "slot",
+            &selected_account
+                .account_slot
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv(
+            "hash",
+            selected_account
+                .account_id_hash_hex
+                .as_deref()
+                .unwrap_or("-"),
+        ),
         kv("mode", &selected_account.mode),
+        kv(
+            "tier",
+            selected_account.gateway_tier.as_deref().unwrap_or("-"),
+        ),
+        kv(
+            "role",
+            selected_account.account_role.as_deref().unwrap_or("-"),
+        ),
+        kv(
+            "role_bits",
+            &selected_account
+                .role_bits
+                .map(|value| format!("0b{value:02b}"))
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv(
+            "readonly",
+            &selected_account
+                .readonly
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv("short", selected_account.short_permission_label()),
+        kv("acct_type", selected_account.margin_permission_label()),
         kv("broker", &selected_account.broker),
         kv("broker_ok", mark(selected_account.broker_connected)),
         kv("cash", &selected_account.cash_value.to_string()),
@@ -178,7 +223,7 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
     ];
     frame.render_widget(panel("Selected Account", account_detail), sections[1]);
 
-    let system = vec![
+    let mut system = vec![
         kv("global", &state.risk.global_state),
         kv("nats", &state.connection.nats),
         kv("cmd_gw", &state.connection.command_gateway),
@@ -241,6 +286,38 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
             state.connection.last_error.as_deref().unwrap_or("-"),
         ),
     ];
+    if !state.market_data.by_symbol.is_empty() {
+        system.push(String::new());
+        system.push("Market data summary".to_string());
+        for summary in state.market_data.by_symbol.values().take(6) {
+            system.push(format!(
+                "{:<6} bid={} ask={} spr={} imb={} age={}ms",
+                truncate(&summary.symbol, 6),
+                summary
+                    .bid_price
+                    .as_ref()
+                    .map(|price| price.display_value())
+                    .unwrap_or_else(|| "-".to_string()),
+                summary
+                    .ask_price
+                    .as_ref()
+                    .map(|price| price.display_value())
+                    .unwrap_or_else(|| "-".to_string()),
+                summary
+                    .spread_bps
+                    .map(|value| format!("{value:.1}"))
+                    .unwrap_or_else(|| "-".to_string()),
+                summary
+                    .imbalance
+                    .map(|value| format!("{value:+.2}"))
+                    .unwrap_or_else(|| "-".to_string()),
+                summary
+                    .quote_age_ms
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            ));
+        }
+    }
     frame.render_widget(panel("System", system), sections[2]);
 }
 
@@ -442,7 +519,9 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(panel("Lifecycle", timeline), sections[1]);
 }
 
-fn render_positions(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+fn render_positions(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let state = &app.state;
+    let selected_account = selected_account(state, app.selected_account_index);
     let mut lines = vec![format!(
         "{:<14} {:<8} {:>8} {:>10} {:>10} {:>10}  {}",
         "ACCOUNT", "SYMBOL", "NET_QTY", "AVG_PX", "MKT_PX", "UPNL", "ATTRIBUTION"
@@ -466,13 +545,40 @@ fn render_positions(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         ));
     }
     lines.push(String::new());
+    lines.push(format!("SELECTED_ACCOUNT: {}", selected_account.account_id));
+    lines.push(format!(
+        "CANONICAL_ACCOUNT_ID: {}",
+        selected_account
+            .canonical_account_id
+            .as_deref()
+            .unwrap_or("-")
+    ));
+    lines.push(format!(
+        "ACCOUNT_SLOT: {}  HASH: {}",
+        selected_account
+            .account_slot
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        selected_account
+            .account_id_hash_hex
+            .as_deref()
+            .unwrap_or("-")
+    ));
+    lines.push(format!(
+        "PERMISSIONS: {}",
+        selected_account.permission_summary()
+    ));
     lines.push(format!(
         "SHORT_PERMISSION: {}",
-        state.account.short_permission
+        selected_account.short_permission
+    ));
+    lines.push(format!(
+        "MARGIN_ACCOUNT: {}",
+        selected_account.margin_permission_label()
     ));
     lines.push(format!(
         "SHORT_INTENTS_BLOCKED_TODAY: {}",
-        state.account.short_intents_blocked_today
+        selected_account.short_intents_blocked_today
     ));
     frame.render_widget(panel("Positions", lines), area);
 }
@@ -498,6 +604,8 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
             "short_permission",
             &state.account.short_permission.to_string(),
         ),
+        kv_wide("margin_account", state.account.margin_permission_label()),
+        kv_wide("mutation", state.account.mutation_permission_label()),
         String::new(),
         "LIMITS".to_string(),
     ];
@@ -526,6 +634,49 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let selected_account = selected_account(state, app.selected_account_index);
     let account = vec![
         kv_wide("account", &selected_account.account_id),
+        kv_wide(
+            "canonical",
+            selected_account
+                .canonical_account_id
+                .as_deref()
+                .unwrap_or("-"),
+        ),
+        kv_wide(
+            "slot",
+            &selected_account
+                .account_slot
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv_wide(
+            "hash",
+            selected_account
+                .account_id_hash_hex
+                .as_deref()
+                .unwrap_or("-"),
+        ),
+        kv_wide(
+            "tier",
+            selected_account.gateway_tier.as_deref().unwrap_or("-"),
+        ),
+        kv_wide(
+            "role",
+            selected_account.account_role.as_deref().unwrap_or("-"),
+        ),
+        kv_wide(
+            "role_bits",
+            &selected_account
+                .role_bits
+                .map(|value| format!("0b{value:02b}"))
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv_wide(
+            "readonly",
+            &selected_account
+                .readonly
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
         kv_wide("broker_ok", mark(selected_account.broker_connected)),
         kv_wide("net_liq", &selected_account.net_liquidation.to_string()),
         kv_wide("available", &selected_account.available_funds.to_string()),
@@ -551,6 +702,9 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
             "short_permission",
             &selected_account.short_permission.to_string(),
         ),
+        kv_wide("short_label", selected_account.short_permission_label()),
+        kv_wide("margin_label", selected_account.margin_permission_label()),
+        kv_wide("mutation", selected_account.mutation_permission_label()),
         kv_wide(
             "short_blocked",
             &selected_account.short_intents_blocked_today.to_string(),
@@ -588,32 +742,25 @@ fn render_events(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
         .split(area);
 
-    let lines = state
-        .audit
-        .events
-        .iter()
-        .rev()
-        .take(200)
-        .filter(|event| event_matches_search(event, &app.search_query))
-        .enumerate()
-        .map(|(index, event)| format_event_row(event, index == app.selected_event_index))
-        .collect::<Vec<_>>();
+    let mut lines = vec![format!(
+        " {:<5} {:<20} {:<8} {:<14} {:<12} {}",
+        "SEQ", "TYPE", "AGG", "CORR", "PRODUCER", "HEADLINE"
+    )];
+    lines.extend(
+        state
+            .audit
+            .events
+            .iter()
+            .rev()
+            .take(200)
+            .filter(|event| event_matches_search(event, &app.search_query))
+            .enumerate()
+            .map(|(index, event)| format_event_row(event, index == app.selected_event_index)),
+    );
     frame.render_widget(panel("Events / Audit", lines), sections[0]);
 
     let detail = selected_event(state, &app.search_query, app.selected_event_index)
-        .map(|event| {
-            vec![
-                kv_narrow("seq", &event.sequence.to_string()),
-                kv_narrow("type", &event.event_type),
-                kv_narrow("agg", &event.aggregate_type),
-                kv_narrow("id", &event.aggregate_id),
-                kv_narrow("corr", &event.correlation_id),
-                kv_narrow("prod", &event.producer),
-                kv_narrow("ts_ns", &event.ts_ns.to_string()),
-                String::new(),
-                event.headline.clone(),
-            ]
-        })
+        .map(|event| event_detail_lines(state, event, &app.search_query))
         .unwrap_or_else(|| vec!["no events".to_string()]);
     frame.render_widget(panel("Event Detail", detail), sections[1]);
 }
@@ -903,6 +1050,102 @@ fn selected_event<'a>(
         .nth(selected_index)
 }
 
+fn event_detail_lines(state: &AppState, event: &EventSummary, query: &str) -> Vec<String> {
+    let mut lines = vec![
+        "ENVELOPE".to_string(),
+        kv_narrow("event_id", &event.event_id),
+        kv_narrow("seq", &event.sequence.to_string()),
+        kv_narrow("type", &event.event_type),
+        kv_narrow("schema", &event.schema_version),
+        kv_narrow("producer", &event.producer),
+        kv_narrow("env", &event.environment),
+        kv_narrow("stream", dash_if_empty(&event.stream)),
+        kv_narrow("subject", dash_if_empty(&event.subject)),
+        kv_narrow("partition", dash_if_empty(&event.partition_key)),
+        String::new(),
+        "AGGREGATE".to_string(),
+        kv_narrow("agg_type", &event.aggregate_type),
+        kv_narrow("agg_id", &event.aggregate_id),
+        kv_narrow("corr", &event.correlation_id),
+        kv_narrow("causation", dash_if_empty(&event.causation_id)),
+        kv_narrow(
+            "order_chain",
+            mark(
+                state
+                    .orders
+                    .by_correlation_id
+                    .contains_key(&event.correlation_id),
+            ),
+        ),
+        String::new(),
+        "TIMESTAMPS".to_string(),
+        kv_narrow("source_ns", &event.source_ts_ns.to_string()),
+        kv_narrow("ingest_ns", &event.ingest_ts_ns.to_string()),
+        kv_narrow("publish_ns", &event.publish_ts_ns.to_string()),
+    ];
+
+    if event.trace_id.is_some() || event.span_id.is_some() || event.checksum.is_some() {
+        lines.push(String::new());
+        lines.push("TRACE".to_string());
+        lines.push(kv_narrow(
+            "trace_id",
+            event.trace_id.as_deref().unwrap_or("-"),
+        ));
+        lines.push(kv_narrow(
+            "span_id",
+            event.span_id.as_deref().unwrap_or("-"),
+        ));
+        lines.push(kv_narrow(
+            "checksum",
+            event.checksum.as_deref().unwrap_or("-"),
+        ));
+    }
+
+    if !query.trim().is_empty() {
+        lines.push(String::new());
+        lines.push(kv_narrow("search", query.trim()));
+    }
+
+    lines.push(String::new());
+    lines.push("ACTIONS".to_string());
+    lines.push("c copy correlation_id".to_string());
+    lines.push("o open order chain".to_string());
+    lines.push("s open strategy".to_string());
+    lines.push("y copy decoded payload".to_string());
+
+    lines.push(String::new());
+    lines.push("HEADLINE".to_string());
+    lines.push(event.headline.clone());
+
+    lines.push(String::new());
+    lines.push("PAYLOAD PREVIEW".to_string());
+    lines.extend(payload_preview_lines(event.payload_json.as_deref(), 12));
+    lines
+}
+
+fn payload_preview_lines(payload_json: Option<&str>, max_lines: usize) -> Vec<String> {
+    let Some(payload_json) = payload_json else {
+        return vec!["-".to_string()];
+    };
+    let pretty = serde_json::from_str::<serde_json::Value>(payload_json)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+        .unwrap_or_else(|| payload_json.to_string());
+    pretty
+        .lines()
+        .take(max_lines)
+        .map(|line| truncate(line, 54))
+        .collect()
+}
+
+fn dash_if_empty(value: &str) -> &str {
+    if value.is_empty() {
+        "-"
+    } else {
+        value
+    }
+}
+
 fn selected_account(state: &AppState, selected_index: usize) -> &AccountView {
     state
         .accounts
@@ -918,11 +1161,12 @@ fn selected_account_id(app: &App) -> String {
 
 fn format_account_row(account: &AccountView, selected: bool) -> String {
     format!(
-        "{} {:<14} {:<6} {:<8} {:>+9.2} {:>5.1}% {}",
+        "{} {:<14} {:<6} {:<8} {:<24} {:>+9.2} {:>5.1}% {}",
         if selected { ">" } else { " " },
         truncate(&account.account_id, 14),
         truncate(&account.mode, 6),
         truncate(&account.broker, 8),
+        truncate(&account.permission_summary(), 24),
         account.day_pnl,
         account.exposure_pct,
         runtime_flags(account),
@@ -1085,12 +1329,14 @@ fn format_order_row(chain: &OrderChain, selected: bool) -> String {
 
 fn format_event_row(event: &EventSummary, selected: bool) -> String {
     format!(
-        "{}#{:<4} {:<17} {:<7} {}",
+        "{}{:<5} {:<20} {:<8} {:<14} {:<12} {}",
         if selected { ">" } else { " " },
         event.sequence,
-        truncate(&event.event_type, 17),
-        truncate(&event.aggregate_type, 7),
-        truncate(&event.headline, 13)
+        truncate(&event.event_type, 20),
+        truncate(&event.aggregate_type, 8),
+        truncate(&event.correlation_id, 14),
+        truncate(&event.producer, 12),
+        truncate(&event.headline, 24)
     )
 }
 
@@ -1124,12 +1370,20 @@ fn event_matches_search(event: &EventSummary, query: &str) -> bool {
     query_matches(
         query,
         [
+            event.event_id.as_str(),
             event.event_type.as_str(),
             event.aggregate_type.as_str(),
             event.aggregate_id.as_str(),
             event.correlation_id.as_str(),
+            event.causation_id.as_str(),
             event.producer.as_str(),
+            event.schema_version.as_str(),
+            event.stream.as_str(),
+            event.subject.as_str(),
+            event.partition_key.as_str(),
+            event.environment.as_str(),
             event.headline.as_str(),
+            event.payload_json.as_deref().unwrap_or_default(),
         ],
     )
 }

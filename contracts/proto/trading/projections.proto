@@ -42,6 +42,17 @@ message OverviewSnapshot {
   Money net_exposure = 35;
   Money long_market_value = 36;
   Money short_market_value = 37;
+  string canonical_account_id = 38;
+  optional uint32 account_slot = 39;
+  string account_id_hash_hex = 40;
+  string endpoint_id = 41;
+  optional int32 client_id = 42;
+  string gateway_tier = 43;
+  string account_role = 44;
+  optional uint32 role_bits = 45;
+  optional bool readonly = 46;
+  optional bool margin_account = 47;
+  string account_type = 48;
 }
 
 message AccountRuntimeControls {
@@ -139,6 +150,20 @@ message PositionProjection {
   repeated StrategyPositionAttribution strategy_attribution = 7;
 }
 
+message MarketDataSummaryProjection {
+  string symbol = 1;
+  string source = 2;
+  Price bid_price = 3;
+  Price ask_price = 4;
+  optional double spread_bps = 5;
+  optional double imbalance = 6;
+  Price microprice = 7;
+  optional uint64 quote_age_ms = 8;
+  optional double event_rate_per_sec = 9;
+  optional int64 wall_size = 10;
+  optional int64 summary_ts_ns = 11;
+}
+
 message RiskBlock {
   string scope = 1;
   string severity = 2;
@@ -219,6 +244,7 @@ message TerminalProjectionSnapshot {
   repeated AlertProjection alerts = 10;
   repeated OverviewSnapshot accounts = 11;
   repeated CommandEvidenceProjection commands = 12;
+  repeated MarketDataSummaryProjection market_data = 13;
 }
 
 message EventFilter {

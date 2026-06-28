@@ -1,0 +1,52 @@
+{
+  "policy_version": "command-gateway.policy.example.v1",
+  "allow_capabilities": [
+    "strategy.control",
+    "order.cancel",
+    "order.cancel_all",
+    "account.flatten",
+    "account.kill",
+    "alert.ack"
+  ],
+  "command_capabilities": {
+    "PauseStrategyRequested": "strategy.control",
+    "ResumeStrategyRequested": "strategy.control",
+    "DrainStrategyRequested": "strategy.control",
+    "KillStrategyRequested": "strategy.control",
+    "CancelOrderRequested": "order.cancel",
+    "CancelAllOrdersForSymbolRequested": "order.cancel_all",
+    "CancelAllOrdersForAccountRequested": "order.cancel_all",
+    "FlattenSymbolRequested": "account.flatten",
+    "FlattenAccountRequested": "account.flatten",
+    "GlobalKillSwitchRequested": "account.kill",
+    "AccountKillSwitchRequested": "account.kill",
+    "AcknowledgeAlertRequested": "alert.ack"
+  },
+  "sessions": [
+    {
+      "operator_id": "operator-example",
+      "session_id": "local-terminal-example",
+      "roles": ["trader"],
+      "capabilities": ["strategy.control", "order.cancel", "alert.ack"],
+      "target_environments": ["paper"],
+      "allow_dangerous": false,
+      "mfa_verified": false
+    },
+    {
+      "operator_id": "operator-example",
+      "session_id": "incident-commander-example",
+      "roles": ["incident_commander"],
+      "capabilities": [
+        "strategy.control",
+        "order.cancel",
+        "order.cancel_all",
+        "account.flatten",
+        "account.kill",
+        "alert.ack"
+      ],
+      "target_environments": ["paper", "live"],
+      "allow_dangerous": true,
+      "mfa_verified": true
+    }
+  ]
+}

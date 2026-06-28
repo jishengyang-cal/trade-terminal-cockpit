@@ -1,8 +1,8 @@
 use trade_core::events::{
-    CancelRejected, CancelRequested, CommandAuditRecorded, DomainEvent, EventEnvelope,
-    IntentCreated, OrderFill, OrderSubmitRequested, OrderSubmitted, PositionSnapshot,
-    RiskDecisionMade, RiskRuleEval, SignalGenerated, StrategyHeartbeat,
-    StrategyPositionAttribution,
+    AccountSnapshot, CancelRejected, CancelRequested, CommandAuditRecorded, DomainEvent,
+    EventEnvelope, IntentCreated, MarketDataSummary, OrderFill, OrderSubmitRequested,
+    OrderSubmitted, PositionSnapshot, RiskDecisionMade, RiskRuleEval, SignalGenerated,
+    StrategyHeartbeat, StrategyPositionAttribution,
 };
 use trade_core::state::OrderLifecycleState;
 use trade_core::{reduce_event, AppState, Price};
@@ -119,6 +119,46 @@ fn duplicate_event_ids_are_idempotent() {
     assert_eq!(strategy.signals, 1);
     assert_eq!(state.connection.events_ingested, 1);
     assert_eq!(state.connection.duplicate_events, 1);
+}
+
+#[test]
+fn account_snapshot_derives_ocam_authority_mapping() {
+    let mut state = AppState::default();
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-account-authority-001",
+            "corr-account-authority",
+            1,
+            "account-projection",
+            DomainEvent::AccountSnapshot(AccountSnapshot {
+                account_id: "paper-main".to_string(),
+                mode: Some("PAPER".to_string()),
+                gateway_tier: Some("paper".to_string()),
+                account_slot: Some(0),
+                role_bits: Some(0b11),
+                readonly: Some(false),
+                short_permission: Some(true),
+                margin_account: Some(true),
+                ..Default::default()
+            }),
+        ),
+    );
+
+    let account = state.accounts.by_id.get("paper-main").unwrap();
+    assert_eq!(
+        account.canonical_account_id.as_deref(),
+        Some("paper-main+paper")
+    );
+    assert_eq!(account.account_role.as_deref(), Some("data_and_trade"));
+    assert_eq!(account.short_permission_label(), "CAN_SHORT");
+    assert_eq!(account.margin_permission_label(), "MARGIN");
+    assert_eq!(account.mutation_permission_label(), "TRADE");
+    assert!(account
+        .account_id_hash_hex
+        .as_deref()
+        .unwrap()
+        .starts_with("0x"));
 }
 
 #[test]
@@ -516,4 +556,40 @@ fn coalesces_high_frequency_projection_events_without_dropping_lifecycle_events(
         .events
         .iter()
         .any(|event| event.event_type == "IntentCreated"));
+}
+
+#[test]
+fn coalesces_market_data_summaries_by_symbol() {
+    let mut state = AppState::default();
+    for (sequence, quote_age_ms, imbalance) in [(1, 17, 0.41), (2, 24, -0.12)] {
+        reduce_event(
+            &mut state,
+            EventEnvelope::new(
+                format!("evt-md-{sequence}"),
+                "corr-md",
+                sequence,
+                "market-data-summary",
+                DomainEvent::MarketDataSummary(MarketDataSummary {
+                    symbol: "MU".to_string(),
+                    quote_age_ms: Some(quote_age_ms),
+                    imbalance: Some(imbalance),
+                    ..Default::default()
+                }),
+            ),
+        );
+    }
+
+    let summary = state.market_data.by_symbol.get("MU").unwrap();
+    assert_eq!(summary.quote_age_ms, Some(24));
+    assert_eq!(summary.imbalance, Some(-0.12));
+    assert_eq!(state.connection.events_coalesced, 1);
+    assert_eq!(
+        state
+            .audit
+            .events
+            .iter()
+            .filter(|event| event.event_type == "MarketDataSummary")
+            .count(),
+        1
+    );
 }
