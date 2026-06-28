@@ -59,6 +59,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Char('K') if app.screen == Screen::Risk => app.open_global_kill_modal(),
+        KeyCode::Char('A') if app.screen == Screen::Risk => app.open_account_kill_modal(),
         KeyCode::Char('F') if app.screen == Screen::Risk => app.open_flatten_modal(),
         _ => {}
     }

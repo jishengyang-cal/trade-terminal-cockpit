@@ -12,6 +12,8 @@ fn projection_snapshot_initializes_trade_cockpit_state() {
     apply_projection_snapshot(&mut state, sample_snapshot());
 
     assert_eq!(state.account.account_id, "paper-main");
+    assert_eq!(state.accounts.by_id.len(), 1);
+    assert!(state.accounts.by_id.contains_key("paper-main"));
     assert_eq!(state.strategies.by_id.len(), 1);
     assert_eq!(state.orders.by_correlation_id.len(), 1);
     assert_eq!(
@@ -90,7 +92,9 @@ fn sample_snapshot() -> ProjectionSnapshot {
             margin_usage_pct: 1.0,
             short_permission: false,
             short_intents_blocked_today: 2,
+            runtime_controls: Default::default(),
         }),
+        accounts: Vec::new(),
         strategies: vec![StrategyView {
             strategy_id: "open-scalp".to_string(),
             state: "RUN".to_string(),

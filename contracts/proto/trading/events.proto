@@ -153,4 +153,5 @@ message CommandAuditRecorded {
   string command_type = 3;
   string status = 4;
   string reason = 5;
+  string target = 6;
 }

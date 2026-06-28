@@ -95,7 +95,7 @@ if cargo run -p tradectl -- \
   --session-id smoke-session \
   --reason smoke-test \
   --capability account.kill \
-  global-kill-switch paper-main >/tmp/trade-terminal-cockpit-danger.out 2>&1; then
+  account-kill-switch paper-main >/tmp/trade-terminal-cockpit-danger.out 2>&1; then
   echo "dangerous command unexpectedly succeeded without confirmation" >&2
   cat /tmp/trade-terminal-cockpit-danger.out >&2
   exit 70
@@ -106,16 +106,16 @@ cargo run -p tradectl -- \
   --session-id smoke-session \
   --reason smoke-test \
   --capability account.kill \
-  global-kill-switch paper-main \
-  --confirm 'KILL paper-main' | grep -q '"danger_level":"dangerous"'
+  account-kill-switch paper-main \
+  --confirm 'KILL ACCOUNT paper-main' | grep -q '"danger_level":"dangerous"'
 
 cargo run -p tradectl -- \
   --operator-id smoke-operator \
   --session-id smoke-session \
   --reason smoke-test \
   --capability account.kill \
-  global-kill-switch paper-main \
-  --confirm 'KILL paper-main' >/tmp/trade-terminal-cockpit-danger-command.json
+  account-kill-switch paper-main \
+  --confirm 'KILL ACCOUNT paper-main' >/tmp/trade-terminal-cockpit-danger-command.json
 rm -f /tmp/trade-terminal-cockpit-danger-audit.jsonl
 cargo run -p command-gateway -- \
   --command-json /tmp/trade-terminal-cockpit-danger-command.json \
@@ -171,6 +171,48 @@ grep -q '"status":"dispatched"' /tmp/trade-terminal-cockpit-account-cancel-all-a
 grep -q -- '--family cancel_all' /tmp/trade-terminal-cockpit-fake-broker-control.args
 grep -q -- '--scope account_slot' /tmp/trade-terminal-cockpit-fake-broker-control.args
 grep -q -- '--account-slot 7' /tmp/trade-terminal-cockpit-fake-broker-control.args
+
+cargo run -p tradectl -- \
+  --operator-id smoke-operator \
+  --session-id smoke-session \
+  --reason smoke-test \
+  --capability account.kill \
+  account-kill-switch paper-main \
+  --confirm 'KILL ACCOUNT paper-main' >/tmp/trade-terminal-cockpit-account-kill-command.json
+rm -f /tmp/trade-terminal-cockpit-account-kill-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-account-kill-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-account-kill-audit.jsonl \
+  --allow-dangerous \
+  --execute-broker-control \
+  --broker-runtime-dir /tmp/trade-terminal-cockpit-broker-runtime \
+  --broker-control-bin /tmp/trade-terminal-cockpit-fake-broker-control \
+  --broker-account-slot paper-main=7
+grep -q '"status":"dispatched"' /tmp/trade-terminal-cockpit-account-kill-audit.jsonl
+grep -q '"target":"paper-main"' /tmp/trade-terminal-cockpit-account-kill-audit.jsonl
+grep -q -- '--family cancel_all' /tmp/trade-terminal-cockpit-fake-broker-control.args
+grep -q -- '--scope account_slot' /tmp/trade-terminal-cockpit-fake-broker-control.args
+
+cargo run -p tradectl -- \
+  --operator-id smoke-operator \
+  --session-id smoke-session \
+  --reason smoke-test \
+  --capability account.flatten \
+  flatten-account paper-main \
+  --confirm 'FLATTEN ACCOUNT paper-main' >/tmp/trade-terminal-cockpit-account-flatten-command.json
+rm -f /tmp/trade-terminal-cockpit-account-flatten-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-account-flatten-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-account-flatten-audit.jsonl \
+  --allow-dangerous \
+  --execute-broker-control \
+  --broker-runtime-dir /tmp/trade-terminal-cockpit-broker-runtime \
+  --broker-control-bin /tmp/trade-terminal-cockpit-fake-broker-control \
+  --broker-account-slot paper-main=7
+grep -q '"status":"dispatched"' /tmp/trade-terminal-cockpit-account-flatten-audit.jsonl
+grep -q '"target":"paper-main"' /tmp/trade-terminal-cockpit-account-flatten-audit.jsonl
+grep -q -- '--family flatten_only' /tmp/trade-terminal-cockpit-fake-broker-control.args
+grep -q -- '--scope account_slot' /tmp/trade-terminal-cockpit-fake-broker-control.args
 
 cargo run -p tradectl -- \
   --operator-id smoke-operator \

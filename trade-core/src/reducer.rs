@@ -183,6 +183,7 @@ fn reduce_risk_decision(
         "RISK",
         format!("{status} {}", event.reason_codes.join(",")),
     );
+    let chain_account_id = chain.account_id.clone();
 
     if !event.approved {
         state.risk.active_blocks.push(RiskBlock {
@@ -195,7 +196,15 @@ fn reduce_risk_decision(
             .iter()
             .any(|reason| reason.contains("short_permission"))
         {
-            state.account.short_intents_blocked_today += 1;
+            if let Some(account_id) = chain_account_id {
+                state
+                    .accounts
+                    .get_or_insert(&account_id)
+                    .short_intents_blocked_today += 1;
+                refresh_account_aggregate(state);
+            } else {
+                state.account.short_intents_blocked_today += 1;
+            }
         }
     }
 }
@@ -230,7 +239,7 @@ fn reduce_order_submit_requested(
     state
         .orders
         .index_order(&event.account_id, &event.order_id, &event.correlation_id);
-    state.account.account_id = event.account_id;
+    touch_account(state, &event.account_id);
 }
 
 fn reduce_order_submitted(
@@ -261,9 +270,12 @@ fn reduce_order_submitted(
         strategy.orders += 1;
         strategy.last_order_sequence = Some(sequence);
     }
-    state.account.account_id = event.account_id;
-    state.account.broker = event.broker;
-    state.account.broker_connected = true;
+    {
+        let account = state.accounts.get_or_insert(&event.account_id);
+        account.broker = event.broker;
+        account.broker_connected = true;
+    }
+    refresh_account_aggregate(state);
 }
 
 fn reduce_broker_ack(
@@ -393,6 +405,7 @@ fn reduce_order_rejected(
 }
 
 fn reduce_position_snapshot(state: &mut AppState, event: PositionSnapshot) {
+    let account_id = event.account_id.clone();
     let key = format!("{}:{}", event.account_id, event.symbol);
     let unrealized_pnl = (event.market_price - event.average_price) * event.net_quantity as f64;
     state.positions.upsert(PositionView {
@@ -412,14 +425,7 @@ fn reduce_position_snapshot(state: &mut AppState, event: PositionSnapshot) {
             })
             .collect(),
     });
-    state.account.account_id = event.account_id;
-    state.account.unrealized_pnl = state
-        .positions
-        .by_key
-        .values()
-        .map(|position| position.unrealized_pnl)
-        .sum();
-    state.account.day_pnl = state.account.realized_pnl + state.account.unrealized_pnl;
+    recalculate_account_position_pnl(state, &account_id);
 }
 
 fn reduce_risk_limit_breached(state: &mut AppState, event: RiskLimitBreached) {
@@ -455,10 +461,97 @@ fn reduce_alert_acknowledged(state: &mut AppState, event: AlertAcknowledged) {
 }
 
 fn reduce_command_audit_recorded(state: &mut AppState, event: CommandAuditRecorded) {
-    if event.command_type == "GlobalKillSwitchRequested" && event.status == "accepted" {
+    if event.command_type == "GlobalKillSwitchRequested" && command_was_applied(&event.status) {
         state.risk.kill_switch_active = true;
         state.risk.global_state = "KILL_SWITCH".to_string();
     }
+
+    if !command_was_applied(&event.status) {
+        return;
+    }
+
+    match event.command_type.as_str() {
+        "AccountKillSwitchRequested" | "CancelAllOrdersForAccountRequested" => {
+            if let Some(account_id) = event.target.as_deref() {
+                state
+                    .accounts
+                    .get_or_insert(account_id)
+                    .runtime_controls
+                    .cancel_all = true;
+                refresh_account_aggregate(state);
+            }
+        }
+        "FlattenAccountRequested" => {
+            if let Some(account_id) = event.target.as_deref() {
+                state
+                    .accounts
+                    .get_or_insert(account_id)
+                    .runtime_controls
+                    .flatten_only = true;
+                refresh_account_aggregate(state);
+            }
+        }
+        "CancelAllOrdersForSymbolRequested" => {
+            if let Some((account_id, symbol)) =
+                event.target.as_deref().and_then(split_account_symbol)
+            {
+                if symbol == "*" {
+                    state
+                        .accounts
+                        .get_or_insert(account_id)
+                        .runtime_controls
+                        .cancel_all = true;
+                    refresh_account_aggregate(state);
+                }
+            }
+        }
+        "FlattenSymbolRequested" => {
+            if let Some((account_id, symbol)) =
+                event.target.as_deref().and_then(split_account_symbol)
+            {
+                if symbol == "*" {
+                    state
+                        .accounts
+                        .get_or_insert(account_id)
+                        .runtime_controls
+                        .flatten_only = true;
+                    refresh_account_aggregate(state);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn touch_account(state: &mut AppState, account_id: &str) {
+    state.accounts.get_or_insert(account_id);
+    refresh_account_aggregate(state);
+}
+
+fn recalculate_account_position_pnl(state: &mut AppState, account_id: &str) {
+    let unrealized_pnl = state
+        .positions
+        .by_key
+        .values()
+        .filter(|position| position.account_id == account_id)
+        .map(|position| position.unrealized_pnl)
+        .sum::<f64>();
+    let account = state.accounts.get_or_insert(account_id);
+    account.unrealized_pnl = unrealized_pnl;
+    account.day_pnl = account.realized_pnl + account.unrealized_pnl;
+    refresh_account_aggregate(state);
+}
+
+fn refresh_account_aggregate(state: &mut AppState) {
+    state.account = state.accounts.aggregate_view();
+}
+
+fn command_was_applied(status: &str) -> bool {
+    matches!(status, "dispatched" | "applied" | "executed")
+}
+
+fn split_account_symbol(value: &str) -> Option<(&str, &str)> {
+    value.split_once(':')
 }
 
 fn summarize(envelope: &EventEnvelope) -> EventSummary {
@@ -541,7 +634,12 @@ fn headline(event: &DomainEvent) -> String {
             format!("ack {} by {}", event.alert_id, event.operator_id)
         }
         DomainEvent::CommandAuditRecorded(event) => {
-            format!("command {} {}", event.command_type, event.status)
+            let target = event
+                .target
+                .as_deref()
+                .map(|target| format!(" target={target}"))
+                .unwrap_or_default();
+            format!("command {} {}{}", event.command_type, event.status, target)
         }
     }
 }

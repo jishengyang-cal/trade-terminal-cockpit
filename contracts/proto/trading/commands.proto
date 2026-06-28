@@ -50,12 +50,24 @@ message CancelAllOrdersForSymbolRequested {
   string symbol = 2;
 }
 
+message CancelAllOrdersForAccountRequested {
+  string account_id = 1;
+}
+
 message FlattenSymbolRequested {
   string account_id = 1;
   string symbol = 2;
 }
 
+message FlattenAccountRequested {
+  string account_id = 1;
+}
+
 message GlobalKillSwitchRequested {
+  string account_id = 1;
+}
+
+message AccountKillSwitchRequested {
   string account_id = 1;
 }
 

@@ -1,7 +1,7 @@
 use trade_core::events::{
-    CancelRejected, CancelRequested, DomainEvent, EventEnvelope, IntentCreated,
-    OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade, SignalGenerated,
-    StrategyHeartbeat, StrategyPositionAttribution,
+    CancelRejected, CancelRequested, CommandAuditRecorded, DomainEvent, EventEnvelope,
+    IntentCreated, OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade,
+    SignalGenerated, StrategyHeartbeat, StrategyPositionAttribution,
 };
 use trade_core::state::OrderLifecycleState;
 use trade_core::{reduce_event, AppState};
@@ -238,6 +238,75 @@ fn position_unrealized_pnl_is_projection_only() {
 
     let position = state.positions.by_key.get("paper-main:AMD").unwrap();
     assert!((position.unrealized_pnl - -9.0).abs() < 0.0001);
+}
+
+#[test]
+fn multi_account_positions_do_not_overwrite_account_matrix() {
+    let mut state = AppState::default();
+    for (sequence, account_id, net_quantity, average_price, market_price) in [
+        (1, "paper-main", 100, 10.0, 11.0),
+        (2, "paper-alt", 50, 20.0, 18.0),
+    ] {
+        reduce_event(
+            &mut state,
+            EventEnvelope::new(
+                format!("evt-pos-{sequence}"),
+                format!("corr-pos-{sequence}"),
+                sequence,
+                "test",
+                DomainEvent::PositionSnapshot(PositionSnapshot {
+                    account_id: account_id.to_string(),
+                    symbol: "MU".to_string(),
+                    net_quantity,
+                    average_price,
+                    market_price,
+                    strategy_attribution: vec![StrategyPositionAttribution {
+                        strategy_id: "open-scalp".to_string(),
+                        quantity: net_quantity,
+                    }],
+                }),
+            ),
+        );
+    }
+
+    assert_eq!(state.positions.by_key.len(), 2);
+    assert!(state.positions.by_key.contains_key("paper-main:MU"));
+    assert!(state.positions.by_key.contains_key("paper-alt:MU"));
+    assert_eq!(state.accounts.by_id.len(), 2);
+    assert_eq!(state.account.account_id, "ALL(2)");
+    assert!((state.accounts.by_id["paper-main"].unrealized_pnl - 100.0).abs() < 0.0001);
+    assert!((state.accounts.by_id["paper-alt"].unrealized_pnl - -100.0).abs() < 0.0001);
+    assert!((state.account.unrealized_pnl - 0.0).abs() < 0.0001);
+}
+
+#[test]
+fn account_command_audit_updates_only_target_account_runtime_state() {
+    let mut state = AppState::default();
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-account-kill-audit",
+            "cmd-account-kill",
+            1,
+            "command-gateway",
+            DomainEvent::CommandAuditRecorded(CommandAuditRecorded {
+                command_id: "cmd-account-kill".to_string(),
+                operator_id: "operator-test".to_string(),
+                command_type: "AccountKillSwitchRequested".to_string(),
+                status: "dispatched".to_string(),
+                reason: "broker-control runtime plan dispatched".to_string(),
+                target: Some("paper-main".to_string()),
+            }),
+        ),
+    );
+
+    assert!(
+        state.accounts.by_id["paper-main"]
+            .runtime_controls
+            .cancel_all
+    );
+    assert!(state.account.runtime_controls.cancel_all);
+    assert!(!state.risk.kill_switch_active);
 }
 
 #[test]

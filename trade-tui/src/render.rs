@@ -4,13 +4,14 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
-use trade_core::state::{AppState, EventSummary, OrderChain, StrategyView};
+use trade_core::state::{AccountView, AppState, EventSummary, OrderChain, StrategyView};
 
 pub fn plain_summary(state: &AppState, replay: bool, filter_summary: Option<&str>) -> String {
     let mut summary = format!(
-        "mode={} account={} risk={} strategies={} orders={} positions={} open_alerts={} last_seq={} events_ingested={} events_coalesced={} audit_retained={}",
+        "mode={} account={} accounts={} risk={} strategies={} orders={} positions={} open_alerts={} last_seq={} events_ingested={} events_coalesced={} audit_retained={}",
         if replay { "REPLAY" } else { "READ_ONLY" },
         state.account.account_id,
+        state.accounts.len(),
         state.risk.global_state,
         state.strategies.by_id.len(),
         state.orders.by_correlation_id.len(),
@@ -49,11 +50,11 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     render_tabs(frame, chunks[1], app.screen);
     match app.screen {
         Screen::Help => render_help(frame, chunks[2]),
-        Screen::Overview => render_overview(frame, chunks[2], &app.state),
+        Screen::Overview => render_overview(frame, chunks[2], app),
         Screen::Strategies => render_strategies(frame, chunks[2], app),
         Screen::Orders => render_orders(frame, chunks[2], app),
         Screen::Positions => render_positions(frame, chunks[2], &app.state),
-        Screen::Risk => render_risk(frame, chunks[2], &app.state),
+        Screen::Risk => render_risk(frame, chunks[2], app),
         Screen::Events => render_events(frame, chunks[2], app),
         Screen::Replay => render_replay(frame, chunks[2], app),
         Screen::Commands => render_commands(frame, chunks[2], app),
@@ -66,14 +67,16 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 
 fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let state = &app.state;
+    let selected_account = selected_account(state, app.selected_account_index);
     let mode = if app.replay {
         "REPLAY"
     } else {
-        state.account.mode.as_str()
+        selected_account.mode.as_str()
     };
     let status = format!(
-        " ACCT:{} | {} | {} | PNL:{:+.2} | EXP:{:.1}% | SRC:{} ",
-        truncate(&state.account.account_id, 14),
+        " ACCTS:{} | SEL:{} | {} | RISK:{} | PNL:{:+.2} | EXP:{:.1}% | SRC:{} ",
+        state.accounts.len(),
+        truncate(&selected_account_id(app), 14),
         truncate(mode, 6),
         truncate(&state.risk.global_state, 10),
         state.account.day_pnl,
@@ -107,7 +110,8 @@ fn render_tabs(frame: &mut Frame<'_>, area: Rect, screen: Screen) {
     frame.render_widget(tabs, area);
 }
 
-fn render_overview(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let state = &app.state;
     let sections = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -117,25 +121,52 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         ])
         .split(area);
 
-    let account = vec![
-        kv("account", &state.account.account_id),
-        kv("mode", &state.account.mode),
-        kv("broker", &state.account.broker),
-        kv("broker_ok", mark(state.account.broker_connected)),
-        kv("cash", &format!("{:.2}", state.account.cash)),
-        kv("buy_power", &format!("{:.2}", state.account.buying_power)),
-        kv("day_pnl", &format!("{:+.2}", state.account.day_pnl)),
-        kv("realized", &format!("{:+.2}", state.account.realized_pnl)),
+    let mut accounts = vec![format!(
+        "  {:<14} {:<6} {:<8} {:>9} {:>6} {}",
+        "ACCOUNT", "MODE", "BROKER", "DAY_PNL", "EXP", "CTRL"
+    )];
+    for (index, account) in state.accounts.by_id.values().enumerate() {
+        accounts.push(format_account_row(
+            account,
+            index == app.selected_account_index,
+        ));
+    }
+    frame.render_widget(panel("Accounts", accounts), sections[0]);
+
+    let selected_account = selected_account(state, app.selected_account_index);
+    let account_detail = vec![
+        kv("account", &selected_account.account_id),
+        kv("mode", &selected_account.mode),
+        kv("broker", &selected_account.broker),
+        kv("broker_ok", mark(selected_account.broker_connected)),
+        kv("cash", &format!("{:.2}", selected_account.cash)),
+        kv(
+            "buy_power",
+            &format!("{:.2}", selected_account.buying_power),
+        ),
+        kv("day_pnl", &format!("{:+.2}", selected_account.day_pnl)),
+        kv(
+            "realized",
+            &format!("{:+.2}", selected_account.realized_pnl),
+        ),
         kv(
             "unrealized",
-            &format!("{:+.2}", state.account.unrealized_pnl),
+            &format!("{:+.2}", selected_account.unrealized_pnl),
         ),
-        kv("exposure", &format!("{:.1}%", state.account.exposure_pct)),
-        kv("margin", &format!("{:.1}%", state.account.margin_usage_pct)),
+        kv(
+            "exposure",
+            &format!("{:.1}%", selected_account.exposure_pct),
+        ),
+        kv(
+            "margin",
+            &format!("{:.1}%", selected_account.margin_usage_pct),
+        ),
+        kv("runtime", &runtime_flags(selected_account)),
     ];
-    frame.render_widget(panel("Account", account), sections[0]);
+    frame.render_widget(panel("Selected Account", account_detail), sections[1]);
 
     let system = vec![
+        kv("global", &state.risk.global_state),
         kv("nats", &state.connection.nats),
         kv("cmd_gw", &state.connection.command_gateway),
         kv(
@@ -166,22 +197,7 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         kv("positions", &state.positions.by_key.len().to_string()),
         kv("alerts", &state.alerts.open_count().to_string()),
     ];
-    frame.render_widget(panel("System", system), sections[1]);
-
-    let risk = vec![
-        kv("state", &state.risk.global_state),
-        kv("kill_ok", mark(!state.risk.kill_switch_active)),
-        kv("md_fresh", mark(state.risk.market_data_fresh)),
-        kv("orders_ok", mark(state.risk.broker_order_channel_ok)),
-        kv("loss_ok", mark(!state.risk.day_max_loss_breached)),
-        kv("quote_ok", mark(state.risk.quote_staleness_ok)),
-        kv("short_ok", &state.account.short_permission.to_string()),
-        kv(
-            "short_blk",
-            &state.account.short_intents_blocked_today.to_string(),
-        ),
-    ];
-    frame.render_widget(panel("Risk", risk), sections[2]);
+    frame.render_widget(panel("System", system), sections[2]);
 }
 
 fn render_help(frame: &mut Frame<'_>, area: Rect) {
@@ -197,7 +213,8 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         String::new(),
         "Risk actions".to_string(),
         "K global kill switch preview".to_string(),
-        "F flatten symbol preview".to_string(),
+        "A account kill switch preview".to_string(),
+        "F flatten selected account preview".to_string(),
         String::new(),
         "All actions remain command-envelope previews. Broker execution stays outside trade-tui."
             .to_string(),
@@ -244,8 +261,8 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .split(area);
 
     let mut rows = vec![format!(
-        "  {:<12} {:<7} {:<4} {:>4}",
-        "CORR", "STATE", "SYM", "FILL"
+        "  {:<12} {:<7} {:<10} {:<4} {:>4}",
+        "CORR", "STATE", "ACCT", "SYM", "FILL"
     )];
     for (index, chain) in state
         .orders
@@ -285,8 +302,8 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_positions(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let mut lines = vec![format!(
-        "{:<8} {:>8} {:>10} {:>10} {:>10}  {}",
-        "SYMBOL", "NET_QTY", "AVG_PX", "MKT_PX", "UPNL", "ATTRIBUTION"
+        "{:<14} {:<8} {:>8} {:>10} {:>10} {:>10}  {}",
+        "ACCOUNT", "SYMBOL", "NET_QTY", "AVG_PX", "MKT_PX", "UPNL", "ATTRIBUTION"
     )];
     for position in state.positions.by_key.values() {
         let attribution = position
@@ -296,7 +313,8 @@ fn render_positions(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             .collect::<Vec<_>>()
             .join(", ");
         lines.push(format!(
-            "{:<8} {:>8} {:>10.2} {:>10.2} {:>+10.2}  {}",
+            "{:<14} {:<8} {:>8} {:>10.2} {:>10.2} {:>+10.2}  {}",
+            truncate(&position.account_id, 14),
             position.symbol,
             position.net_quantity,
             position.average_price,
@@ -317,14 +335,19 @@ fn render_positions(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_widget(panel("Positions", lines), area);
 }
 
-fn render_risk(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let state = &app.state;
     let sections = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
         .split(area);
 
     let mut global = vec![
-        kv_wide("account_connected", mark(state.account.broker_connected)),
+        kv_wide("accounts_connected", mark(state.account.broker_connected)),
         kv_wide("market_data_fresh", mark(state.risk.market_data_fresh)),
         kv_wide("order_channel_ok", mark(state.risk.broker_order_channel_ok)),
         kv_wide("day_loss_ok", mark(!state.risk.day_max_loss_breached)),
@@ -341,6 +364,31 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
     frame.render_widget(panel("Global Risk", global), sections[0]);
 
+    let selected_account = selected_account(state, app.selected_account_index);
+    let account = vec![
+        kv_wide("account", &selected_account.account_id),
+        kv_wide("broker_ok", mark(selected_account.broker_connected)),
+        kv_wide("day_pnl", &format!("{:+.2}", selected_account.day_pnl)),
+        kv_wide(
+            "unrealized",
+            &format!("{:+.2}", selected_account.unrealized_pnl),
+        ),
+        kv_wide(
+            "exposure",
+            &format!("{:.1}%", selected_account.exposure_pct),
+        ),
+        kv_wide(
+            "short_permission",
+            &selected_account.short_permission.to_string(),
+        ),
+        kv_wide(
+            "short_blocked",
+            &selected_account.short_intents_blocked_today.to_string(),
+        ),
+        kv_wide("runtime", &runtime_flags(selected_account)),
+    ];
+    frame.render_widget(panel("Selected Account Risk", account), sections[1]);
+
     let mut blocks = Vec::new();
     if state.risk.active_blocks.is_empty() {
         blocks.push("no active blocks".to_string());
@@ -352,7 +400,7 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             ));
         }
     }
-    frame.render_widget(panel("Active Blocks", blocks), sections[1]);
+    frame.render_widget(panel("Active Blocks", blocks), sections[2]);
 }
 
 fn render_events(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -427,9 +475,13 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
         "resume-strategy <strategy_id>".to_string(),
         "drain-strategy <strategy_id>".to_string(),
         "cancel-order <account_id> <order_id>".to_string(),
+        "cancel-all-orders-for-account <account_id> --confirm 'CANCEL ALL ACCOUNT <account_id>'"
+            .to_string(),
+        "flatten-account <account_id> --confirm 'FLATTEN ACCOUNT <account_id>'".to_string(),
+        "account-kill-switch <account_id> --confirm 'KILL ACCOUNT <account_id>'".to_string(),
         "flatten-symbol <account_id> <symbol> --confirm 'FLATTEN <account_id> <symbol>'"
             .to_string(),
-        "global-kill-switch <account_id> --confirm 'KILL <account_id>'".to_string(),
+        "global-kill-switch global --confirm 'KILL global'".to_string(),
         String::new(),
         "TUI does not send these commands. Use tradectl or command-gateway audit flow.".to_string(),
     ];
@@ -485,6 +537,12 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         match app.screen {
         Screen::Strategies | Screen::Orders | Screen::Events if app.replay => {
             " REPLAY: / search | no live commands | up/down or j/k select | q exits ".to_string()
+        }
+        Screen::Overview | Screen::Risk if app.replay => {
+            " REPLAY: up/down or j/k select account | no live commands | q exits ".to_string()
+        }
+        Screen::Overview | Screen::Risk => {
+            " READ ONLY: up/down or j/k select account | K global | A account kill | F account flatten | q exits ".to_string()
         }
         Screen::Strategies | Screen::Orders | Screen::Events => {
             " READ ONLY: / search | up/down or j/k select | commands externalized through tradectl | q exits ".to_string()
@@ -567,6 +625,32 @@ fn selected_event<'a>(
         .take(200)
         .filter(|event| event_matches_search(event, query))
         .nth(selected_index)
+}
+
+fn selected_account(state: &AppState, selected_index: usize) -> &AccountView {
+    state
+        .accounts
+        .selected_or_first(selected_index)
+        .unwrap_or(&state.account)
+}
+
+fn selected_account_id(app: &App) -> String {
+    selected_account(&app.state, app.selected_account_index)
+        .account_id
+        .clone()
+}
+
+fn format_account_row(account: &AccountView, selected: bool) -> String {
+    format!(
+        "{} {:<14} {:<6} {:<8} {:>+9.2} {:>5.1}% {}",
+        if selected { ">" } else { " " },
+        truncate(&account.account_id, 14),
+        truncate(&account.mode, 6),
+        truncate(&account.broker, 8),
+        account.day_pnl,
+        account.exposure_pct,
+        runtime_flags(account),
+    )
 }
 
 fn format_strategy_row(strategy: &StrategyView, selected: bool) -> String {
@@ -653,10 +737,11 @@ fn strategy_detail_lines(strategy: &StrategyView) -> Vec<String> {
 
 fn format_order_row(chain: &OrderChain, selected: bool) -> String {
     format!(
-        "{} {:<12} {:<7} {:<4} {:>4}",
+        "{} {:<12} {:<7} {:<10} {:<4} {:>4}",
         if selected { ">" } else { " " },
         truncate(&chain.correlation_id, 12),
         truncate(&format!("{:?}", chain.state), 7),
+        truncate(chain.account_id.as_deref().unwrap_or("-"), 10),
         truncate(chain.symbol.as_deref().unwrap_or("-"), 4),
         chain.filled_quantity,
     )
@@ -729,6 +814,27 @@ fn mark(ok: bool) -> &'static str {
         "[x]"
     } else {
         "[ ]"
+    }
+}
+
+fn runtime_flags(account: &AccountView) -> String {
+    let mut flags = Vec::new();
+    if account.runtime_controls.entry_disabled {
+        flags.push("entry_off");
+    }
+    if account.runtime_controls.reduce_only {
+        flags.push("reduce");
+    }
+    if account.runtime_controls.flatten_only {
+        flags.push("flatten");
+    }
+    if account.runtime_controls.cancel_all {
+        flags.push("cancel_all");
+    }
+    if flags.is_empty() {
+        "-".to_string()
+    } else {
+        flags.join(",")
     }
 }
 

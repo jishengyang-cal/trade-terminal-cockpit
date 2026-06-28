@@ -12,6 +12,7 @@ smoke check.
 | Orders Page | Orders view supports selected-chain drilldown plus in-app search/filter state. | Closed | VM workspace tests and smoke |
 | Events / Audit | Events view supports search state, selected detail, correlation visibility, and command/evidence replay paths. | Closed | VM workspace tests and smoke |
 | Risk Page | Risk command intent flow is represented as dangerous command-envelope previews, not direct broker execution. | Closed | VM workspace tests and smoke |
+| Multi-Account Cockpit | Account projections are stored as an account matrix; Overview/Risk/Orders/Positions display account scope without last-event overwrite. | Closed | VM reducer tests and smoke |
 | Replay | Replay loads JSONL locally and can consume replayable JetStream durable streams; Postgres/event-store adapters stay behind the projection boundary. | Closed | VM smoke replay and JetStream CLI surface checks |
 | Command System | `tradectl` emits replayable command envelopes; `command-gateway` validates, applies capability policy, records audit events, and can dispatch supported runtime-control commands to an external `broker-control-gateway`. | Closed | VM smoke accepted/rejected/dispatched gateway assertions |
 | Observability | TUI exposes counters in state/plain output and can emit OpenTelemetry stdout traces/metrics with `--otel-stdout`. | Closed | VM smoke OTEL trace/metric grep |
@@ -23,5 +24,5 @@ smoke check.
 | TUI dangerous action modal | Dangerous action confirmation state exists in TUI and stays command-envelope only. | Closed | VM compile/smoke |
 | TUI command palette | Command palette state exists and can preview/replay command-envelope forms. | Closed | VM compile/smoke |
 | F1 Help / F9 Commands / F10 Exit | Key bindings and screens are implemented. | Closed | VM compile/smoke |
-| Flatten / kill switch backend chain | `tradectl` emits dangerous envelopes, TUI previews them, and gateway can dispatch exact global/account runtime controls to external `broker-control-gateway`; single-symbol operations are audited as unsupported until a symbol-aware order gateway exists. | Closed | VM smoke dangerous rejection, broker-control dispatch, and unsupported symbol-scope rejection |
+| Flatten / kill switch backend chain | `tradectl` emits dangerous envelopes, TUI previews global/account scope separately, and gateway can dispatch exact global/account runtime controls to external `broker-control-gateway`; single-symbol operations are audited as unsupported until a symbol-aware order gateway exists. | Closed | VM smoke dangerous rejection, broker-control dispatch, account kill dispatch, and unsupported symbol-scope rejection |
 | Evidence bundle export | `tradectl evidence-bundle` exports filtered events, commands, and rebuilt projection state. | Closed | VM smoke evidence JSON assertions |

@@ -45,6 +45,7 @@ fn main() -> Result<()> {
         source: "state-projectiond-jsonl".to_string(),
         last_event_sequence: state.connection.last_event_sequence,
         account: Some(state.account),
+        accounts: state.accounts.by_id.into_values().collect(),
         strategies: state.strategies.by_id.into_values().collect(),
         orders: state.orders.by_correlation_id.into_values().collect(),
         positions: state.positions.by_key.into_values().collect(),

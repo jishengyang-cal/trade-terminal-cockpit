@@ -67,13 +67,28 @@ enum Command {
         #[arg(long)]
         confirm: Option<String>,
     },
+    CancelAllOrdersForAccount {
+        account_id: String,
+        #[arg(long)]
+        confirm: Option<String>,
+    },
     FlattenSymbol {
         account_id: String,
         symbol: String,
         #[arg(long)]
         confirm: Option<String>,
     },
+    FlattenAccount {
+        account_id: String,
+        #[arg(long)]
+        confirm: Option<String>,
+    },
     GlobalKillSwitch {
+        account_id: String,
+        #[arg(long)]
+        confirm: Option<String>,
+    },
+    AccountKillSwitch {
         account_id: String,
         #[arg(long)]
         confirm: Option<String>,
@@ -326,6 +341,18 @@ fn payload_from_command(command: &Command) -> Result<CommandPayload> {
                 symbol: symbol.clone(),
             })
         }
+        Command::CancelAllOrdersForAccount {
+            account_id,
+            confirm,
+        } => {
+            require_confirmation(
+                confirm.as_deref(),
+                &format!("CANCEL ALL ACCOUNT {account_id}"),
+            )?;
+            Ok(CommandPayload::CancelAllOrdersForAccountRequested {
+                account_id: account_id.clone(),
+            })
+        }
         Command::FlattenSymbol {
             account_id,
             symbol,
@@ -340,12 +367,35 @@ fn payload_from_command(command: &Command) -> Result<CommandPayload> {
                 symbol: symbol.clone(),
             })
         }
+        Command::FlattenAccount {
+            account_id,
+            confirm,
+        } => {
+            require_confirmation(confirm.as_deref(), &format!("FLATTEN ACCOUNT {account_id}"))?;
+            Ok(CommandPayload::FlattenAccountRequested {
+                account_id: account_id.clone(),
+            })
+        }
         Command::GlobalKillSwitch {
             account_id,
             confirm,
         } => {
+            if !is_global_account_alias(account_id) {
+                bail!(
+                    "global-kill-switch requires account_id global/all/*; use account-kill-switch for {account_id}"
+                );
+            }
             require_confirmation(confirm.as_deref(), &format!("KILL {account_id}"))?;
             Ok(CommandPayload::GlobalKillSwitchRequested {
+                account_id: account_id.clone(),
+            })
+        }
+        Command::AccountKillSwitch {
+            account_id,
+            confirm,
+        } => {
+            require_confirmation(confirm.as_deref(), &format!("KILL ACCOUNT {account_id}"))?;
+            Ok(CommandPayload::AccountKillSwitchRequested {
                 account_id: account_id.clone(),
             })
         }
@@ -370,4 +420,8 @@ fn new_id(prefix: &str) -> String {
         trade_core::unix_ts_ns(),
         std::process::id()
     )
+}
+
+fn is_global_account_alias(account_id: &str) -> bool {
+    matches!(account_id, "global" | "all" | "*")
 }

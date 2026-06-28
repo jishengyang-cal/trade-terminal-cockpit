@@ -49,6 +49,7 @@ pub struct App {
     pub command_palette_input: String,
     pub dangerous_action: Option<DangerousAction>,
     pub dangerous_confirmation: String,
+    pub selected_account_index: usize,
     pub selected_strategy_index: usize,
     pub selected_order_index: usize,
     pub selected_event_index: usize,
@@ -80,6 +81,7 @@ impl App {
             command_palette_input: String::new(),
             dangerous_action: None,
             dangerous_confirmation: String::new(),
+            selected_account_index: 0,
             selected_strategy_index: 0,
             selected_order_index: 0,
             selected_event_index: 0,
@@ -123,6 +125,10 @@ impl App {
 
     pub fn select_next(&mut self) {
         match self.screen {
+            Screen::Overview | Screen::Risk => {
+                let len = self.visible_account_count();
+                self.selected_account_index = next_index(self.selected_account_index, len);
+            }
             Screen::Strategies => {
                 let len = self.visible_strategy_count();
                 self.selected_strategy_index = next_index(self.selected_strategy_index, len);
@@ -141,6 +147,9 @@ impl App {
 
     pub fn select_previous(&mut self) {
         match self.screen {
+            Screen::Overview | Screen::Risk => {
+                self.selected_account_index = self.selected_account_index.saturating_sub(1);
+            }
             Screen::Strategies => {
                 self.selected_strategy_index = self.selected_strategy_index.saturating_sub(1);
             }
@@ -196,44 +205,52 @@ impl App {
     }
 
     pub fn open_global_kill_modal(&mut self) {
-        let account_id = self.state.account.account_id.clone();
         self.dangerous_action = Some(DangerousAction {
             action: "GLOBAL KILL SWITCH".to_string(),
+            target: "global".to_string(),
+            effects: vec![
+                "set broker global_kill runtime control".to_string(),
+                "blocks all account entry through global circuit".to_string(),
+                "must be replayed through command-gateway audit".to_string(),
+            ],
+            expected_confirmation: "KILL global".to_string(),
+            tradectl_replay: "tradectl global-kill-switch global --confirm 'KILL global'"
+                .to_string(),
+        });
+        self.dangerous_confirmation.clear();
+    }
+
+    pub fn open_account_kill_modal(&mut self) {
+        let account_id = self.selected_account_id();
+        self.dangerous_action = Some(DangerousAction {
+            action: "ACCOUNT KILL SWITCH".to_string(),
             target: account_id.clone(),
             effects: vec![
-                "pause all strategies".to_string(),
-                "cancel open orders through command-gateway".to_string(),
-                "block new intents through risk authority".to_string(),
+                "set account-scoped cancel_all runtime control".to_string(),
+                "blocks new entry for this account".to_string(),
+                "requires --broker-account-slot account=slot at gateway".to_string(),
             ],
-            expected_confirmation: format!("KILL {account_id}"),
+            expected_confirmation: format!("KILL ACCOUNT {account_id}"),
             tradectl_replay: format!(
-                "tradectl global-kill-switch {account_id} --confirm 'KILL {account_id}'"
+                "tradectl account-kill-switch {account_id} --confirm 'KILL ACCOUNT {account_id}'"
             ),
         });
         self.dangerous_confirmation.clear();
     }
 
     pub fn open_flatten_modal(&mut self) {
-        let account_id = self.state.account.account_id.clone();
-        let symbol = self
-            .state
-            .positions
-            .by_key
-            .values()
-            .next()
-            .map(|position| position.symbol.clone())
-            .unwrap_or_else(|| "<symbol>".to_string());
+        let account_id = self.selected_account_id();
         self.dangerous_action = Some(DangerousAction {
-            action: "FLATTEN SYMBOL".to_string(),
-            target: format!("{account_id}:{symbol}"),
+            action: "FLATTEN ACCOUNT".to_string(),
+            target: account_id.clone(),
             effects: vec![
-                "request flatten through command-gateway".to_string(),
-                "risk authority must approve".to_string(),
-                "order gateway owns broker execution".to_string(),
+                "set account-scoped flatten_only runtime control".to_string(),
+                "only flattening intents remain admissible".to_string(),
+                "requires --broker-account-slot account=slot at gateway".to_string(),
             ],
-            expected_confirmation: format!("FLATTEN {account_id} {symbol}"),
+            expected_confirmation: format!("FLATTEN ACCOUNT {account_id}"),
             tradectl_replay: format!(
-                "tradectl flatten-symbol {account_id} {symbol} --confirm 'FLATTEN {account_id} {symbol}'"
+                "tradectl flatten-account {account_id} --confirm 'FLATTEN ACCOUNT {account_id}'"
             ),
         });
         self.dangerous_confirmation.clear();
@@ -255,9 +272,20 @@ impl App {
     }
 
     fn reset_selection(&mut self) {
+        self.selected_account_index = 0;
         self.selected_strategy_index = 0;
         self.selected_order_index = 0;
         self.selected_event_index = 0;
+    }
+
+    fn selected_account_id(&self) -> String {
+        self.state
+            .accounts
+            .selected_account_id(self.selected_account_index)
+    }
+
+    fn visible_account_count(&self) -> usize {
+        self.state.accounts.len()
     }
 
     fn visible_strategy_count(&self) -> usize {

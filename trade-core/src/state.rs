@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, VecDeque};
 pub struct AppState {
     pub connection: ConnectionState,
     pub account: AccountView,
+    #[serde(default)]
+    pub accounts: AccountStore,
     pub strategies: StrategyStore,
     pub orders: OrderStore,
     pub positions: PositionStore,
@@ -18,6 +20,7 @@ impl Default for AppState {
         Self {
             connection: ConnectionState::default(),
             account: AccountView::default(),
+            accounts: AccountStore::default(),
             strategies: StrategyStore::default(),
             orders: OrderStore::default(),
             positions: PositionStore::default(),
@@ -78,12 +81,20 @@ pub struct AccountView {
     pub margin_usage_pct: f64,
     pub short_permission: bool,
     pub short_intents_blocked_today: u64,
+    #[serde(default)]
+    pub runtime_controls: AccountRuntimeControls,
 }
 
 impl Default for AccountView {
     fn default() -> Self {
+        Self::new("paper")
+    }
+}
+
+impl AccountView {
+    pub fn new(account_id: &str) -> Self {
         Self {
-            account_id: "paper".to_string(),
+            account_id: account_id.to_string(),
             mode: "PAPER".to_string(),
             broker: "unknown".to_string(),
             broker_connected: false,
@@ -96,7 +107,119 @@ impl Default for AccountView {
             margin_usage_pct: 0.0,
             short_permission: false,
             short_intents_blocked_today: 0,
+            runtime_controls: AccountRuntimeControls::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountRuntimeControls {
+    pub entry_disabled: bool,
+    pub reduce_only: bool,
+    pub flatten_only: bool,
+    pub cancel_all: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AccountStore {
+    pub by_id: BTreeMap<String, AccountView>,
+}
+
+impl Default for AccountStore {
+    fn default() -> Self {
+        Self {
+            by_id: BTreeMap::new(),
+        }
+    }
+}
+
+impl AccountStore {
+    pub fn get_or_insert(&mut self, account_id: &str) -> &mut AccountView {
+        self.by_id
+            .entry(account_id.to_string())
+            .or_insert_with(|| AccountView::new(account_id))
+    }
+
+    pub fn selected_or_first(&self, selected_index: usize) -> Option<&AccountView> {
+        self.by_id
+            .values()
+            .nth(selected_index)
+            .or_else(|| self.by_id.values().next())
+    }
+
+    pub fn selected_account_id(&self, selected_index: usize) -> String {
+        self.selected_or_first(selected_index)
+            .map(|account| account.account_id.clone())
+            .unwrap_or_else(|| AccountView::default().account_id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    pub fn aggregate_view(&self) -> AccountView {
+        let mut values = self.by_id.values();
+        let Some(first) = values.next() else {
+            return AccountView::default();
+        };
+        if self.by_id.len() == 1 {
+            return first.clone();
+        }
+
+        let mut aggregate = AccountView::new(&format!("ALL({})", self.by_id.len()));
+        aggregate.mode = "MULTI".to_string();
+        aggregate.broker = "mixed".to_string();
+        aggregate.broker_connected = self.by_id.values().all(|account| account.broker_connected);
+        aggregate.cash = self.by_id.values().map(|account| account.cash).sum();
+        aggregate.buying_power = self
+            .by_id
+            .values()
+            .map(|account| account.buying_power)
+            .sum();
+        aggregate.day_pnl = self.by_id.values().map(|account| account.day_pnl).sum();
+        aggregate.realized_pnl = self
+            .by_id
+            .values()
+            .map(|account| account.realized_pnl)
+            .sum();
+        aggregate.unrealized_pnl = self
+            .by_id
+            .values()
+            .map(|account| account.unrealized_pnl)
+            .sum();
+        aggregate.exposure_pct = self
+            .by_id
+            .values()
+            .map(|account| account.exposure_pct)
+            .fold(0.0, f64::max);
+        aggregate.margin_usage_pct = self
+            .by_id
+            .values()
+            .map(|account| account.margin_usage_pct)
+            .fold(0.0, f64::max);
+        aggregate.short_permission = self.by_id.values().all(|account| account.short_permission);
+        aggregate.short_intents_blocked_today = self
+            .by_id
+            .values()
+            .map(|account| account.short_intents_blocked_today)
+            .sum();
+        aggregate.runtime_controls.entry_disabled = self
+            .by_id
+            .values()
+            .any(|account| account.runtime_controls.entry_disabled);
+        aggregate.runtime_controls.reduce_only = self
+            .by_id
+            .values()
+            .any(|account| account.runtime_controls.reduce_only);
+        aggregate.runtime_controls.flatten_only = self
+            .by_id
+            .values()
+            .any(|account| account.runtime_controls.flatten_only);
+        aggregate.runtime_controls.cancel_all = self
+            .by_id
+            .values()
+            .any(|account| account.runtime_controls.cancel_all);
+        aggregate
     }
 }
 

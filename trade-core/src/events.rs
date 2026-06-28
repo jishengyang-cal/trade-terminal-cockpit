@@ -301,4 +301,6 @@ pub struct CommandAuditRecorded {
     pub command_type: String,
     pub status: String,
     pub reason: String,
+    #[serde(default)]
+    pub target: Option<String>,
 }

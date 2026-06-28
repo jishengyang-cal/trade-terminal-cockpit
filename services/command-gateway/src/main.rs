@@ -58,6 +58,7 @@ fn main() -> Result<()> {
             command_type: command.command_type,
             status,
             reason,
+            target: Some(command.aggregate_id),
         }),
     );
 
@@ -202,6 +203,30 @@ fn broker_control_request(
         CommandPayload::CancelAllOrdersForSymbolRequested { account_id, symbol } => Err(format!(
             "broker-control adapter cannot execute symbol-scoped cancel-all for {account_id}:{symbol}; use symbol=* with account_id=global/all/* or --broker-account-slot to request a supported broker runtime scope; no scope broadening was performed"
         )),
+        CommandPayload::FlattenAccountRequested { account_id } => {
+            let scope = broker_control_account_slot_scope(account_id, account_slots)?;
+            Ok(BrokerControlRequest {
+                scope,
+                family: "flatten_only",
+                mode: "assert",
+            })
+        }
+        CommandPayload::CancelAllOrdersForAccountRequested { account_id } => {
+            let scope = broker_control_account_slot_scope(account_id, account_slots)?;
+            Ok(BrokerControlRequest {
+                scope,
+                family: "cancel_all",
+                mode: "assert",
+            })
+        }
+        CommandPayload::AccountKillSwitchRequested { account_id } => {
+            let scope = broker_control_account_slot_scope(account_id, account_slots)?;
+            Ok(BrokerControlRequest {
+                scope,
+                family: "cancel_all",
+                mode: "assert",
+            })
+        }
         CommandPayload::KillStrategyRequested { strategy_id } => Err(format!(
             "no strategy-control adapter configured for kill strategy {strategy_id}"
         )),
@@ -238,6 +263,24 @@ fn broker_control_scope(
         Some(account_slot) => Ok(BrokerControlScope::AccountSlot(account_slot)),
         None => Err(format!(
             "broker-control adapter requires account_id=global/all/* or --broker-account-slot {account_id}=SLOT for account-scoped runtime control; no scope broadening was performed"
+        )),
+    }
+}
+
+fn broker_control_account_slot_scope(
+    account_id: &str,
+    account_slots: &[String],
+) -> std::result::Result<BrokerControlScope, String> {
+    if is_global_account_alias(account_id) {
+        return Err(
+            "account-scoped runtime control requires a concrete account_id; use the global command for account_id=global/all/*".to_string(),
+        );
+    }
+
+    match account_slot_for(account_id, account_slots)? {
+        Some(account_slot) => Ok(BrokerControlScope::AccountSlot(account_slot)),
+        None => Err(format!(
+            "account-scoped runtime control requires --broker-account-slot {account_id}=SLOT; no global scope fallback was performed"
         )),
     }
 }
@@ -401,9 +444,11 @@ fn expected_capability(command_type: &str) -> Option<&'static str> {
         | "ResumeStrategyRequested"
         | "DrainStrategyRequested"
         | "KillStrategyRequested" => Some("strategy.control"),
-        "CancelOrderRequested" | "CancelAllOrdersForSymbolRequested" => Some("order.cancel"),
-        "FlattenSymbolRequested" => Some("account.flatten"),
-        "GlobalKillSwitchRequested" => Some("account.kill"),
+        "CancelOrderRequested"
+        | "CancelAllOrdersForSymbolRequested"
+        | "CancelAllOrdersForAccountRequested" => Some("order.cancel"),
+        "FlattenSymbolRequested" | "FlattenAccountRequested" => Some("account.flatten"),
+        "GlobalKillSwitchRequested" | "AccountKillSwitchRequested" => Some("account.kill"),
         "AcknowledgeAlertRequested" => Some("alert.ack"),
         _ => None,
     }
@@ -521,6 +566,43 @@ mod tests {
                 mode: "assert",
             }
         );
+    }
+
+    #[test]
+    fn maps_account_kill_to_account_slot_cancel_all() {
+        let command = command(
+            CommandPayload::AccountKillSwitchRequested {
+                account_id: "paper-main".to_string(),
+            },
+            "account.kill",
+        );
+        let account_slots = vec!["paper-main=7".to_string()];
+
+        let request = broker_control_request(&command, &account_slots).expect("request should map");
+
+        assert_eq!(
+            request,
+            BrokerControlRequest {
+                scope: BrokerControlScope::AccountSlot(7),
+                family: "cancel_all",
+                mode: "assert",
+            }
+        );
+    }
+
+    #[test]
+    fn account_kill_requires_account_slot_mapping() {
+        let command = command(
+            CommandPayload::AccountKillSwitchRequested {
+                account_id: "paper-main".to_string(),
+            },
+            "account.kill",
+        );
+
+        let reason =
+            broker_control_request(&command, &[]).expect_err("request must require slot mapping");
+
+        assert!(reason.contains("--broker-account-slot paper-main=SLOT"));
     }
 
     #[test]

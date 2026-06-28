@@ -19,6 +19,14 @@ message OverviewSnapshot {
   bool short_permission = 12;
   uint64 short_intents_blocked_today = 13;
   string risk_state = 14;
+  AccountRuntimeControls runtime_controls = 15;
+}
+
+message AccountRuntimeControls {
+  bool entry_disabled = 1;
+  bool reduce_only = 2;
+  bool flatten_only = 3;
+  bool cancel_all = 4;
 }
 
 message StrategySnapshot {
@@ -114,6 +122,7 @@ message TerminalProjectionSnapshot {
   repeated PositionProjection positions = 8;
   RiskSnapshot risk = 9;
   repeated AlertProjection alerts = 10;
+  repeated OverviewSnapshot accounts = 11;
 }
 
 message EventFilter {

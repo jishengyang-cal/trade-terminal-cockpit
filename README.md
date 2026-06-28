@@ -91,12 +91,41 @@ Tab         next screen
 Shift-Tab   previous screen
 /           search current cockpit list
 :           command palette input
-Up/Down     select order chain or event row
-j/k         select order chain or event row
+Up/Down     select account, order chain, or event row
+j/k         select account, order chain, or event row
 K           risk page global kill-switch preview
-F           risk page flatten-symbol preview
+A           risk page account kill-switch preview
+F           risk page flatten selected account preview
 q           exit
 ```
+
+## Multi-Account Cockpit
+
+The cockpit is account-aware. `AppState` keeps an `accounts.by_id` matrix and a
+separate aggregate `account` view for compatibility/plain summaries. Order
+chains and positions retain `account_id`, and Overview/Risk render the selected
+account alongside global status.
+
+Global and account controls are intentionally separate:
+
+```text
+global-kill-switch global
+  -> broker-control global_kill / scope=global
+
+account-kill-switch <account_id>
+  -> broker-control cancel_all / scope=account_slot
+
+flatten-account <account_id>
+  -> broker-control flatten_only / scope=account_slot
+
+cancel-all-orders-for-account <account_id>
+  -> broker-control cancel_all / scope=account_slot
+```
+
+`global_kill` is never sent with account scope because broker-core rejects that
+combination. Account-scoped commands require
+`--broker-account-slot ACCOUNT_ID=SLOT` at the gateway; the frontend never
+guesses slot mappings.
 
 ## Tailnet Access
 
@@ -234,6 +263,15 @@ CancelAllOrdersForSymbolRequested account_id=global|all|* symbol=*
 FlattenSymbolRequested or CancelAllOrdersForSymbolRequested with symbol=*
 and --broker-account-slot ACCOUNT_ID=SLOT
   -> broker-control scope=account_slot mode=assert
+
+FlattenAccountRequested account_id=<account_id>
+  -> broker-control family=flatten_only scope=account_slot mode=assert
+
+CancelAllOrdersForAccountRequested account_id=<account_id>
+  -> broker-control family=cancel_all scope=account_slot mode=assert
+
+AccountKillSwitchRequested account_id=<account_id>
+  -> broker-control family=cancel_all scope=account_slot mode=assert
 ```
 
 Single-symbol flatten/cancel-all, single-order cancel, and strategy controls are
@@ -249,6 +287,6 @@ cargo run -p tradectl -- \
   --reason smoke-test \
   --capability account.kill \
   --pretty \
-  global-kill-switch paper-main \
-  --confirm 'KILL paper-main'
+  account-kill-switch paper-main \
+  --confirm 'KILL ACCOUNT paper-main'
 ```

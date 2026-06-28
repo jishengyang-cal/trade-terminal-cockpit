@@ -78,11 +78,20 @@ pub enum CommandPayload {
         account_id: String,
         symbol: String,
     },
+    CancelAllOrdersForAccountRequested {
+        account_id: String,
+    },
     FlattenSymbolRequested {
         account_id: String,
         symbol: String,
     },
+    FlattenAccountRequested {
+        account_id: String,
+    },
     GlobalKillSwitchRequested {
+        account_id: String,
+    },
+    AccountKillSwitchRequested {
         account_id: String,
     },
     AcknowledgeAlertRequested {
@@ -99,8 +108,11 @@ impl CommandPayload {
             Self::KillStrategyRequested { .. } => "KillStrategyRequested",
             Self::CancelOrderRequested { .. } => "CancelOrderRequested",
             Self::CancelAllOrdersForSymbolRequested { .. } => "CancelAllOrdersForSymbolRequested",
+            Self::CancelAllOrdersForAccountRequested { .. } => "CancelAllOrdersForAccountRequested",
             Self::FlattenSymbolRequested { .. } => "FlattenSymbolRequested",
+            Self::FlattenAccountRequested { .. } => "FlattenAccountRequested",
             Self::GlobalKillSwitchRequested { .. } => "GlobalKillSwitchRequested",
+            Self::AccountKillSwitchRequested { .. } => "AccountKillSwitchRequested",
             Self::AcknowledgeAlertRequested { .. } => "AcknowledgeAlertRequested",
         }
     }
@@ -114,7 +126,10 @@ impl CommandPayload {
             Self::CancelOrderRequested { .. } => "order",
             Self::CancelAllOrdersForSymbolRequested { .. }
             | Self::FlattenSymbolRequested { .. } => "symbol",
-            Self::GlobalKillSwitchRequested { .. } => "account",
+            Self::CancelAllOrdersForAccountRequested { .. }
+            | Self::FlattenAccountRequested { .. }
+            | Self::GlobalKillSwitchRequested { .. }
+            | Self::AccountKillSwitchRequested { .. } => "account",
             Self::AcknowledgeAlertRequested { .. } => "alert",
         }
     }
@@ -133,6 +148,9 @@ impl CommandPayload {
             | Self::FlattenSymbolRequested { account_id, symbol } => {
                 format!("{account_id}:{symbol}")
             }
+            Self::CancelAllOrdersForAccountRequested { account_id }
+            | Self::FlattenAccountRequested { account_id }
+            | Self::AccountKillSwitchRequested { account_id } => account_id.clone(),
             Self::GlobalKillSwitchRequested { account_id } => account_id.clone(),
             Self::AcknowledgeAlertRequested { alert_id } => alert_id.clone(),
         }
@@ -147,8 +165,11 @@ impl CommandPayload {
             | Self::AcknowledgeAlertRequested { .. } => DangerLevel::Controlled,
             Self::KillStrategyRequested { .. }
             | Self::CancelAllOrdersForSymbolRequested { .. }
+            | Self::CancelAllOrdersForAccountRequested { .. }
             | Self::FlattenSymbolRequested { .. }
-            | Self::GlobalKillSwitchRequested { .. } => DangerLevel::Dangerous,
+            | Self::FlattenAccountRequested { .. }
+            | Self::GlobalKillSwitchRequested { .. }
+            | Self::AccountKillSwitchRequested { .. } => DangerLevel::Dangerous,
         }
     }
 }

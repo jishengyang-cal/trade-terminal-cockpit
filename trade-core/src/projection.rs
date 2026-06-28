@@ -10,6 +10,8 @@ pub struct ProjectionSnapshot {
     pub source: String,
     pub last_event_sequence: Option<u64>,
     pub account: Option<AccountView>,
+    #[serde(default)]
+    pub accounts: Vec<AccountView>,
     pub strategies: Vec<StrategyView>,
     pub orders: Vec<OrderChain>,
     pub positions: Vec<PositionView>,
@@ -18,8 +20,18 @@ pub struct ProjectionSnapshot {
 }
 
 pub fn apply_projection_snapshot(state: &mut AppState, snapshot: ProjectionSnapshot) {
+    state.accounts.by_id.clear();
     if let Some(account) = snapshot.account {
-        state.account = account;
+        state
+            .accounts
+            .by_id
+            .insert(account.account_id.clone(), account);
+    }
+    for account in snapshot.accounts {
+        state
+            .accounts
+            .by_id
+            .insert(account.account_id.clone(), account);
     }
 
     state.strategies.by_id.clear();
@@ -48,8 +60,18 @@ pub fn apply_projection_snapshot(state: &mut AppState, snapshot: ProjectionSnaps
 
     state.positions.by_key.clear();
     for position in snapshot.positions {
+        state.accounts.get_or_insert(&position.account_id);
         state.positions.upsert(position);
     }
+    recalculate_account_pnls_from_positions(state);
+    if state.accounts.by_id.is_empty() {
+        let account = AccountView::default();
+        state
+            .accounts
+            .by_id
+            .insert(account.account_id.clone(), account);
+    }
+    state.account = state.accounts.aggregate_view();
 
     if let Some(risk) = snapshot.risk {
         state.risk = risk;
@@ -63,4 +85,17 @@ pub fn apply_projection_snapshot(state: &mut AppState, snapshot: ProjectionSnaps
     state.connection.nats = snapshot.source;
     state.connection.last_event_sequence = snapshot.last_event_sequence;
     state.connection.last_event_ts_ns = Some(snapshot.snapshot_ts_ns);
+}
+
+fn recalculate_account_pnls_from_positions(state: &mut AppState) {
+    for account in state.accounts.by_id.values_mut() {
+        account.unrealized_pnl = state
+            .positions
+            .by_key
+            .values()
+            .filter(|position| position.account_id == account.account_id)
+            .map(|position| position.unrealized_pnl)
+            .sum();
+        account.day_pnl = account.realized_pnl + account.unrealized_pnl;
+    }
 }
