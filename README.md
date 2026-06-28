@@ -12,7 +12,7 @@ shared event/command projection types only.
 ```text
 event store / JetStream / state projection service
   -> trade-core reducer/projection state
-  -> trade-tui read-only terminal cockpit
+  -> trade-tui terminal cockpit
   -> local terminal / local tmux / local Zellij
 
 operator / automation
@@ -24,8 +24,9 @@ operator / automation
 
 Rules:
 
-- `trade-tui` is read-only in this repository. It renders events and materialized
-  projections into a trading cockpit.
+- `trade-tui` renders events/materialized projections and can submit
+  `CommandEnvelope` requests to `command-gateway`. It still never calls broker,
+  risk, or strategy runtime APIs directly.
 - `tradectl` emits command envelopes. It does not execute commands.
 - Dangerous commands require exact confirmation text and remain replayable from
   the CLI.
@@ -41,7 +42,7 @@ Rules:
 
 ```text
 trade-core/       event, command, reducer, and view-state types
-trade-tui/        Ratatui/Crossterm read-only terminal cockpit
+trade-tui/        Ratatui/Crossterm terminal cockpit
 tradectl/         non-interactive command-envelope emitter
 services/
   state-projectiond/  JSONL-to-projection boundary service
@@ -85,7 +86,7 @@ Useful cockpit keys:
 ```text
 F1          help
 F2-F8       switch cockpit screens
-F9          command previews
+F9          command evidence / gateway status
 F10         exit
 Tab         next screen
 Shift-Tab   previous screen
@@ -93,9 +94,11 @@ Shift-Tab   previous screen
 :           command palette input
 Up/Down     select account, order chain, or event row
 j/k         select account, order chain, or event row
-K           risk page global kill-switch preview
-A           risk page account kill-switch preview
-F           risk page flatten selected account preview
+K           risk page global kill-switch command
+A           risk page account kill-switch command
+F           risk page flatten selected account command
+p/r/d/k     strategy page pause/resume/drain/kill commands
+x/X         order page cancel order / cancel all selected symbol commands
 q           exit
 ```
 

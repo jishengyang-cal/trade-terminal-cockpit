@@ -6,9 +6,9 @@ cd "$ROOT_DIR"
 
 cargo check --workspace
 cargo test --workspace
-cargo run -p trade-tui -- --plain | grep -q 'mode=READ_ONLY'
+cargo run -p trade-tui -- --plain | grep -q 'mode=COCKPIT'
 cargo run -p trade-tui -- --plain | grep -q 'events_ingested='
-TRADE_TUI_BIN="$ROOT_DIR/target/debug/trade-tui" tools/open_local_tui.sh --plain --mock | grep -q 'mode=READ_ONLY'
+TRADE_TUI_BIN="$ROOT_DIR/target/debug/trade-tui" tools/open_local_tui.sh --plain --mock | grep -q 'mode=COCKPIT'
 cargo run -p trade-tui -- --plain --replay --from 2026-06-25T09:30:00 --to 2026-06-25T10:00:00 | grep -q 'mode=REPLAY'
 cargo run -p trade-tui -- --plain --symbol MU | grep -q 'filter="symbol=MU"'
 cargo run -p trade-tui -- --plain --snapshot-json fixtures/projection_snapshot.json | grep -q 'account=paper-snapshot'

@@ -871,6 +871,7 @@ fn reduce_ingest_diagnostic(
 }
 
 fn reduce_command_authority_decided(state: &mut AppState, event: CommandAuthorityDecided) {
+    state.connection.command_gateway = event.status.clone();
     let command = state.commands.get_or_insert(&event.command_id);
     command.operator_id = Some(event.operator_id);
     command.command_type = Some(event.command_type);
@@ -887,6 +888,7 @@ fn reduce_command_authority_decided(state: &mut AppState, event: CommandAuthorit
 }
 
 fn reduce_command_audit_recorded(state: &mut AppState, event: CommandAuditRecorded) {
+    state.connection.command_gateway = event.status.clone();
     let command = state.commands.get_or_insert(&event.command_id);
     command.operator_id = Some(event.operator_id.clone());
     command.command_type = Some(event.command_type.clone());

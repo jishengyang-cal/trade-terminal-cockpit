@@ -1,4 +1,5 @@
 use crate::cli::Cli;
+use crate::command_client::CommandClient;
 use crate::{input, render};
 use anyhow::Result;
 use crossterm::event;
@@ -12,7 +13,7 @@ use std::io;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 use trade_core::state::{EventSummary, OrderChain, StrategyView};
-use trade_core::{reduce_event, AppState, EventEnvelope};
+use trade_core::{reduce_event, AppState, CommandPayload, EventEnvelope};
 
 pub fn run(
     state: AppState,
@@ -47,8 +48,10 @@ pub struct App {
     pub search_query: String,
     pub command_palette_active: bool,
     pub command_palette_input: String,
-    pub dangerous_action: Option<DangerousAction>,
+    pub dangerous_action: Option<PendingCommandAction>,
     pub dangerous_confirmation: String,
+    pub last_command_message: Option<String>,
+    pub command_client: CommandClient,
     pub selected_account_index: usize,
     pub selected_strategy_index: usize,
     pub selected_order_index: usize,
@@ -64,6 +67,7 @@ impl App {
         filter_summary: Option<String>,
         event_rx: Option<Receiver<EventEnvelope>>,
     ) -> Self {
+        let command_client = CommandClient::from_cli(&cli);
         Self {
             state,
             screen: if cli.replay {
@@ -81,6 +85,8 @@ impl App {
             command_palette_input: String::new(),
             dangerous_action: None,
             dangerous_confirmation: String::new(),
+            last_command_message: None,
+            command_client,
             selected_account_index: 0,
             selected_strategy_index: 0,
             selected_order_index: 0,
@@ -226,7 +232,7 @@ impl App {
     }
 
     pub fn open_global_kill_modal(&mut self) {
-        self.dangerous_action = Some(DangerousAction {
+        self.open_command_modal(PendingCommandAction {
             action: "GLOBAL KILL SWITCH".to_string(),
             target: "global".to_string(),
             effects: vec![
@@ -237,13 +243,17 @@ impl App {
             expected_confirmation: "KILL global".to_string(),
             tradectl_replay: "tradectl global-kill-switch global --confirm 'KILL global'"
                 .to_string(),
+            payload: CommandPayload::GlobalKillSwitchRequested {
+                account_id: "global".to_string(),
+            },
+            capability: "account.kill".to_string(),
+            reason: self.command_client.config().reason.clone(),
         });
-        self.dangerous_confirmation.clear();
     }
 
     pub fn open_account_kill_modal(&mut self) {
         let account_id = self.selected_account_id();
-        self.dangerous_action = Some(DangerousAction {
+        self.open_command_modal(PendingCommandAction {
             action: "ACCOUNT KILL SWITCH".to_string(),
             target: account_id.clone(),
             effects: vec![
@@ -255,13 +265,17 @@ impl App {
             tradectl_replay: format!(
                 "tradectl account-kill-switch {account_id} --confirm 'KILL ACCOUNT {account_id}'"
             ),
+            payload: CommandPayload::AccountKillSwitchRequested {
+                account_id: account_id.clone(),
+            },
+            capability: "account.kill".to_string(),
+            reason: self.command_client.config().reason.clone(),
         });
-        self.dangerous_confirmation.clear();
     }
 
     pub fn open_flatten_modal(&mut self) {
         let account_id = self.selected_account_id();
-        self.dangerous_action = Some(DangerousAction {
+        self.open_command_modal(PendingCommandAction {
             action: "FLATTEN ACCOUNT".to_string(),
             target: account_id.clone(),
             effects: vec![
@@ -273,8 +287,158 @@ impl App {
             tradectl_replay: format!(
                 "tradectl flatten-account {account_id} --confirm 'FLATTEN ACCOUNT {account_id}'"
             ),
+            payload: CommandPayload::FlattenAccountRequested {
+                account_id: account_id.clone(),
+            },
+            capability: "account.flatten".to_string(),
+            reason: self.command_client.config().reason.clone(),
         });
+    }
+
+    pub fn open_strategy_pause_modal(&mut self) {
+        if let Some(strategy_id) = self.selected_strategy_id() {
+            self.open_command_modal(PendingCommandAction {
+                action: "PAUSE STRATEGY".to_string(),
+                target: strategy_id.clone(),
+                effects: vec![
+                    "send PauseStrategyRequested to command-gateway".to_string(),
+                    "state changes only after authority/audit events are reduced".to_string(),
+                ],
+                expected_confirmation: format!("PAUSE {strategy_id}"),
+                tradectl_replay: format!("tradectl pause-strategy {strategy_id}"),
+                payload: CommandPayload::PauseStrategyRequested {
+                    strategy_id: strategy_id.clone(),
+                },
+                capability: "strategy.control".to_string(),
+                reason: self.command_client.config().reason.clone(),
+            });
+        } else {
+            self.last_command_message = Some("no selected strategy".to_string());
+        }
+    }
+
+    pub fn open_strategy_resume_modal(&mut self) {
+        if let Some(strategy_id) = self.selected_strategy_id() {
+            self.open_command_modal(PendingCommandAction {
+                action: "RESUME STRATEGY".to_string(),
+                target: strategy_id.clone(),
+                effects: vec![
+                    "send ResumeStrategyRequested to command-gateway".to_string(),
+                    "strategy state updates only from the event stream/audit result".to_string(),
+                ],
+                expected_confirmation: format!("RESUME {strategy_id}"),
+                tradectl_replay: format!("tradectl resume-strategy {strategy_id}"),
+                payload: CommandPayload::ResumeStrategyRequested {
+                    strategy_id: strategy_id.clone(),
+                },
+                capability: "strategy.control".to_string(),
+                reason: self.command_client.config().reason.clone(),
+            });
+        } else {
+            self.last_command_message = Some("no selected strategy".to_string());
+        }
+    }
+
+    pub fn open_strategy_drain_modal(&mut self) {
+        if let Some(strategy_id) = self.selected_strategy_id() {
+            self.open_command_modal(PendingCommandAction {
+                action: "DRAIN STRATEGY".to_string(),
+                target: strategy_id.clone(),
+                effects: vec![
+                    "send DrainStrategyRequested to command-gateway".to_string(),
+                    "no direct strategy runtime call is made by trade-tui".to_string(),
+                ],
+                expected_confirmation: format!("DRAIN {strategy_id}"),
+                tradectl_replay: format!("tradectl drain-strategy {strategy_id}"),
+                payload: CommandPayload::DrainStrategyRequested {
+                    strategy_id: strategy_id.clone(),
+                },
+                capability: "strategy.control".to_string(),
+                reason: self.command_client.config().reason.clone(),
+            });
+        } else {
+            self.last_command_message = Some("no selected strategy".to_string());
+        }
+    }
+
+    pub fn open_strategy_kill_modal(&mut self) {
+        if let Some(strategy_id) = self.selected_strategy_id() {
+            self.open_command_modal(PendingCommandAction {
+                action: "KILL STRATEGY".to_string(),
+                target: strategy_id.clone(),
+                effects: vec![
+                    "send KillStrategyRequested to command-gateway".to_string(),
+                    "requires gateway dangerous-command policy to accept it".to_string(),
+                ],
+                expected_confirmation: format!("KILL STRATEGY {strategy_id}"),
+                tradectl_replay: format!(
+                    "tradectl kill-strategy {strategy_id} --confirm 'KILL STRATEGY {strategy_id}'"
+                ),
+                payload: CommandPayload::KillStrategyRequested {
+                    strategy_id: strategy_id.clone(),
+                },
+                capability: "strategy.control".to_string(),
+                reason: self.command_client.config().reason.clone(),
+            });
+        } else {
+            self.last_command_message = Some("no selected strategy".to_string());
+        }
+    }
+
+    pub fn open_cancel_order_modal(&mut self) {
+        let Some((account_id, order_id)) = self.selected_order_account_and_id() else {
+            self.last_command_message =
+                Some("selected order is missing account_id/order_id".to_string());
+            return;
+        };
+        self.open_command_modal(PendingCommandAction {
+            action: "CANCEL ORDER".to_string(),
+            target: format!("{account_id}:{order_id}"),
+            effects: vec![
+                "send CancelOrderRequested to command-gateway".to_string(),
+                "order cancellation result must arrive as order lifecycle events".to_string(),
+            ],
+            expected_confirmation: format!("CANCEL {account_id} {order_id}"),
+            tradectl_replay: format!("tradectl cancel-order {account_id} {order_id}"),
+            payload: CommandPayload::CancelOrderRequested {
+                account_id,
+                order_id,
+            },
+            capability: "order.cancel".to_string(),
+            reason: self.command_client.config().reason.clone(),
+        });
+    }
+
+    pub fn open_cancel_all_for_symbol_modal(&mut self) {
+        let Some((account_id, symbol)) = self.selected_order_account_and_symbol() else {
+            self.last_command_message =
+                Some("selected order is missing account_id/symbol".to_string());
+            return;
+        };
+        self.open_command_modal(PendingCommandAction {
+            action: "CANCEL ALL FOR SYMBOL".to_string(),
+            target: format!("{account_id}:{symbol}"),
+            effects: vec![
+                "send CancelAllOrdersForSymbolRequested to command-gateway".to_string(),
+                "gateway must refuse unsupported scope widening".to_string(),
+            ],
+            expected_confirmation: format!("CANCEL ALL {account_id} {symbol}"),
+            tradectl_replay: format!(
+                "tradectl cancel-all-orders-for-symbol {account_id} {symbol} --confirm 'CANCEL ALL {account_id} {symbol}'"
+            ),
+            payload: CommandPayload::CancelAllOrdersForSymbolRequested {
+                account_id,
+                symbol,
+            },
+            capability: "order.cancel".to_string(),
+            reason: self.command_client.config().reason.clone(),
+        });
+    }
+
+    fn open_command_modal(&mut self, action: PendingCommandAction) {
+        self.dangerous_action = Some(action);
         self.dangerous_confirmation.clear();
+        self.last_command_message = None;
     }
 
     pub fn close_dangerous_modal(&mut self) {
@@ -290,6 +454,46 @@ impl App {
 
     pub fn pop_dangerous_confirmation_char(&mut self) {
         self.dangerous_confirmation.pop();
+    }
+
+    pub fn submit_pending_command(&mut self) {
+        let Some(action) = self.dangerous_action.clone() else {
+            return;
+        };
+        if self.replay {
+            self.last_command_message =
+                Some("replay mode blocks live command submission".to_string());
+            return;
+        }
+        if self.dangerous_confirmation != action.expected_confirmation {
+            self.last_command_message = Some(format!(
+                "confirmation mismatch; type exactly: {}",
+                action.expected_confirmation
+            ));
+            return;
+        }
+
+        match self.command_client.submit(
+            action.payload,
+            &action.capability,
+            &action.reason,
+            &action.expected_confirmation,
+        ) {
+            Ok(submission) => {
+                let event_count = submission.events.len();
+                for event in submission.events {
+                    reduce_event(&mut self.state, event);
+                }
+                self.last_command_message = Some(format!(
+                    "command {} {} ({} gateway events)",
+                    submission.command_id, submission.status, event_count
+                ));
+                self.close_dangerous_modal();
+            }
+            Err(error) => {
+                self.last_command_message = Some(format!("command failed: {error}"));
+            }
+        }
     }
 
     fn reset_selection(&mut self) {
@@ -337,6 +541,35 @@ impl App {
             .filter(|event| event_matches_search(event, &self.search_query))
             .count()
     }
+
+    fn selected_strategy_id(&self) -> Option<String> {
+        self.state
+            .strategies
+            .by_id
+            .values()
+            .filter(|strategy| strategy_matches_search(strategy, &self.search_query))
+            .nth(self.selected_strategy_index)
+            .map(|strategy| strategy.strategy_id.clone())
+    }
+
+    fn selected_order_chain(&self) -> Option<&OrderChain> {
+        self.state
+            .orders
+            .by_correlation_id
+            .values()
+            .filter(|chain| order_matches_search(chain, &self.search_query))
+            .nth(self.selected_order_index)
+    }
+
+    fn selected_order_account_and_id(&self) -> Option<(String, String)> {
+        let chain = self.selected_order_chain()?;
+        Some((chain.account_id.clone()?, chain.order_id.clone()?))
+    }
+
+    fn selected_order_account_and_symbol(&self) -> Option<(String, String)> {
+        let chain = self.selected_order_chain()?;
+        Some((chain.account_id.clone()?, chain.symbol.clone()?))
+    }
 }
 
 fn next_index(current: usize, len: usize) -> usize {
@@ -347,13 +580,16 @@ fn next_index(current: usize, len: usize) -> usize {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DangerousAction {
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingCommandAction {
     pub action: String,
     pub target: String,
     pub effects: Vec<String>,
     pub expected_confirmation: String,
     pub tradectl_replay: String,
+    pub payload: CommandPayload,
+    pub capability: String,
+    pub reason: String,
 }
 
 fn strategy_matches_search(strategy: &StrategyView, query: &str) -> bool {

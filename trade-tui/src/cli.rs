@@ -5,7 +5,7 @@ use trade_core::EventFilter;
 
 #[derive(Clone, Debug, Parser)]
 #[command(name = "trade-tui")]
-#[command(about = "Read-only trading domain terminal cockpit")]
+#[command(about = "Trading domain terminal cockpit")]
 pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub snapshot_json: Option<PathBuf>,
@@ -75,6 +75,43 @@ pub struct Cli {
 
     #[arg(long, default_value = "trade-tui")]
     pub otel_service_name: String,
+
+    #[arg(long, value_name = "OPERATOR")]
+    pub operator_id: Option<String>,
+
+    #[arg(long, value_name = "SESSION")]
+    pub session_id: Option<String>,
+
+    #[arg(long, default_value = "trade-tui interactive command")]
+    pub command_reason: String,
+
+    #[arg(long, value_name = "PATH")]
+    pub command_gateway_bin: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = ".run/trade-tui-command-audit.jsonl"
+    )]
+    pub command_gateway_audit_jsonl: PathBuf,
+
+    #[arg(long)]
+    pub command_gateway_allow_dangerous: bool,
+
+    #[arg(long)]
+    pub command_gateway_execute_broker_control: bool,
+
+    #[arg(long, value_name = "PATH")]
+    pub broker_runtime_dir: Option<PathBuf>,
+
+    #[arg(long, value_name = "PATH")]
+    pub broker_control_bin: Option<PathBuf>,
+
+    #[arg(long = "broker-account-slot", value_name = "ACCOUNT_ID=SLOT")]
+    pub broker_account_slots: Vec<String>,
+
+    #[arg(long, default_value = "paper")]
+    pub target_environment: String,
 }
 
 impl Cli {

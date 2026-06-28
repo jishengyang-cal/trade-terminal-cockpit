@@ -13,7 +13,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 
     if app.dangerous_action.is_some() {
         match key.code {
-            KeyCode::Esc | KeyCode::Enter => app.close_dangerous_modal(),
+            KeyCode::Esc => app.close_dangerous_modal(),
+            KeyCode::Enter => app.submit_pending_command(),
             KeyCode::Backspace => app.pop_dangerous_confirmation_char(),
             KeyCode::Char(ch) => app.push_dangerous_confirmation_char(ch),
             _ => {}
@@ -49,6 +50,17 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Tab => app.next_screen(),
         KeyCode::BackTab => app.previous_screen(),
+        KeyCode::Char('K') if app.screen == Screen::Risk => app.open_global_kill_modal(),
+        KeyCode::Char('A') if app.screen == Screen::Risk => app.open_account_kill_modal(),
+        KeyCode::Char('F') if app.screen == Screen::Risk => app.open_flatten_modal(),
+        KeyCode::Char('p') if app.screen == Screen::Strategies => app.open_strategy_pause_modal(),
+        KeyCode::Char('r') if app.screen == Screen::Strategies => app.open_strategy_resume_modal(),
+        KeyCode::Char('d') if app.screen == Screen::Strategies => app.open_strategy_drain_modal(),
+        KeyCode::Char('k') if app.screen == Screen::Strategies => app.open_strategy_kill_modal(),
+        KeyCode::Char('x') if app.screen == Screen::Orders => app.open_cancel_order_modal(),
+        KeyCode::Char('X') if app.screen == Screen::Orders => {
+            app.open_cancel_all_for_symbol_modal()
+        }
         KeyCode::Down | KeyCode::Char('j') => app.select_next(),
         KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
         KeyCode::F(key) => {
@@ -58,9 +70,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 app.screen = screen;
             }
         }
-        KeyCode::Char('K') if app.screen == Screen::Risk => app.open_global_kill_modal(),
-        KeyCode::Char('A') if app.screen == Screen::Risk => app.open_account_kill_modal(),
-        KeyCode::Char('F') if app.screen == Screen::Risk => app.open_flatten_modal(),
         _ => {}
     }
 }

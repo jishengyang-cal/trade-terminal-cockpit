@@ -9,7 +9,7 @@ use trade_core::state::{AccountView, AppState, EventSummary, OrderChain, Strateg
 pub fn plain_summary(state: &AppState, replay: bool, filter_summary: Option<&str>) -> String {
     let mut summary = format!(
         "mode={} account={} accounts={} risk={} strategies={} orders={} positions={} open_alerts={} last_seq={} events_ingested={} events_coalesced={} audit_retained={}",
-        if replay { "REPLAY" } else { "READ_ONLY" },
+        if replay { "REPLAY" } else { "COCKPIT" },
         state.account.account_id,
         state.accounts.len(),
         state.risk.global_state,
@@ -254,12 +254,17 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         "/ search       : palette       q/Esc exit view".to_string(),
         "Up/Down        j/k select rows".to_string(),
         String::new(),
-        "Risk actions".to_string(),
-        "K global kill switch preview".to_string(),
-        "A account kill switch preview".to_string(),
-        "F flatten selected account preview".to_string(),
+        "Strategy actions".to_string(),
+        "p pause       r resume      d drain       k kill".to_string(),
         String::new(),
-        "All actions remain command-envelope previews. Broker execution stays outside trade-tui."
+        "Order actions".to_string(),
+        "x cancel selected order    X cancel all for selected symbol".to_string(),
+        String::new(),
+        "Risk actions".to_string(),
+        "K global kill switch       A account kill switch       F flatten selected account"
+            .to_string(),
+        String::new(),
+        "Actions submit command envelopes to command-gateway. Broker execution stays outside trade-tui."
             .to_string(),
     ];
     frame.render_widget(panel("Help", lines), area);
@@ -638,6 +643,39 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let mut lines = vec![
         "Command palette".to_string(),
         kv_wide("input", &app.command_palette_input),
+        kv_wide(
+            "gateway_bin",
+            &app.command_client
+                .config()
+                .gateway_bin
+                .display()
+                .to_string(),
+        ),
+        kv_wide(
+            "audit_jsonl",
+            &app.command_client
+                .config()
+                .audit_jsonl
+                .display()
+                .to_string(),
+        ),
+        kv_wide("operator", &app.command_client.config().operator_id),
+        kv_wide("session", &app.command_client.config().session_id),
+        kv_wide(
+            "allow_dangerous",
+            &app.command_client.config().allow_dangerous.to_string(),
+        ),
+        kv_wide(
+            "execute_broker",
+            &app.command_client
+                .config()
+                .execute_broker_control
+                .to_string(),
+        ),
+        kv_wide(
+            "last_status",
+            app.last_command_message.as_deref().unwrap_or("-"),
+        ),
         String::new(),
         "Recent command evidence".to_string(),
     ];
@@ -690,7 +728,7 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
             .to_string(),
         "global-kill-switch global --confirm 'KILL global'".to_string(),
         String::new(),
-        "TUI does not send these commands. Use tradectl or command-gateway audit flow.".to_string(),
+        "TUI and tradectl both use the same CommandEnvelope -> command-gateway chain.".to_string(),
     ]);
     frame.render_widget(panel("Commands", lines), area);
 }
@@ -703,7 +741,7 @@ fn render_dangerous_modal(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(Clear, modal);
 
     let mut lines = vec![
-        "DANGEROUS ACTION".to_string(),
+        "COMMAND CONFIRMATION".to_string(),
         String::new(),
         kv_wide("action", &action.action),
         kv_wide("target", &action.target),
@@ -718,18 +756,19 @@ fn render_dangerous_modal(frame: &mut Frame<'_>, area: Rect, app: &App) {
         "Type exactly".to_string(),
         action.expected_confirmation.clone(),
         kv_wide("input", &app.dangerous_confirmation),
+        kv_wide("status", app.last_command_message.as_deref().unwrap_or("-")),
         String::new(),
         "Replay with tradectl".to_string(),
         action.tradectl_replay.clone(),
         String::new(),
-        "Enter/Esc closes. This modal does not execute the command.".to_string(),
+        "Enter submits to command-gateway when confirmation matches. Esc closes.".to_string(),
     ]);
     frame.render_widget(panel("Confirm", lines), modal);
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let text = if app.dangerous_action.is_some() {
-        " DANGEROUS ACTION: type confirmation | Enter/Esc closes | no command is sent ".to_string()
+        " COMMAND: type confirmation | Enter submits to command-gateway | Esc closes ".to_string()
     } else if app.command_palette_active {
         format!(
             " COMMAND :{} | Enter/Esc closes | Backspace deletes ",
@@ -749,10 +788,16 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
             " REPLAY: up/down or j/k select account | no live commands | q exits ".to_string()
         }
         Screen::Overview | Screen::Risk => {
-            " READ ONLY: up/down or j/k select account | K global | A account kill | F account flatten | q exits ".to_string()
+            " COMMANDS: up/down or j/k select account | K global | A account kill | F account flatten | q exits ".to_string()
         }
-        Screen::Strategies | Screen::Orders | Screen::Events => {
-            " READ ONLY: / search | up/down or j/k select | commands externalized through tradectl | q exits ".to_string()
+        Screen::Strategies => {
+            " COMMANDS: / search | p pause | r resume | d drain | k kill | Up/Down select | q exits ".to_string()
+        }
+        Screen::Orders => {
+            " COMMANDS: / search | x cancel order | X cancel all symbol | Up/Down select | q exits ".to_string()
+        }
+        Screen::Events => {
+            " READ ONLY: / search | up/down or j/k select | q exits ".to_string()
         }
         _ if app.replay => " REPLAY: no live commands | q exits ".to_string(),
         _ => {
