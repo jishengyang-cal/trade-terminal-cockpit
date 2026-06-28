@@ -21,6 +21,32 @@ pub struct CommandEnvelope {
     pub reason: String,
     pub capability: String,
     pub danger_level: DangerLevel,
+    #[serde(default)]
+    pub idempotency_key: String,
+    #[serde(default)]
+    pub expires_at_ns: Option<i64>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub host_id: Option<String>,
+    #[serde(default)]
+    pub terminal_session_id: Option<String>,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+    #[serde(default)]
+    pub authority_policy_version: String,
+    #[serde(default)]
+    pub requested_by_role: Option<String>,
+    #[serde(default)]
+    pub target_environment: String,
+    #[serde(default)]
+    pub requires_mfa: bool,
+    #[serde(default)]
+    pub confirmation_text: Option<String>,
+    #[serde(default)]
+    pub command_hash: String,
     pub payload: CommandPayload,
 }
 
@@ -38,7 +64,24 @@ impl CommandEnvelope {
         let aggregate_type = payload.aggregate_type().to_string();
         let aggregate_id = payload.aggregate_id();
         let danger_level = payload.danger_level();
+        let command_id = command_id.into();
+        let aggregate_id = aggregate_id;
         Self {
+            idempotency_key: command_id.clone(),
+            command_hash: format!("{command_type}:{aggregate_type}:{aggregate_id}"),
+            source: "tradectl".to_string(),
+            authority_policy_version: "unknown".to_string(),
+            target_environment: "paper".to_string(),
+            expires_at_ns: None,
+            dry_run: false,
+            host_id: std::env::var("HOSTNAME").ok(),
+            terminal_session_id: std::env::var("ZELLIJ_SESSION_NAME")
+                .ok()
+                .or_else(|| std::env::var("TMUX").ok()),
+            approval_id: None,
+            requested_by_role: None,
+            requires_mfa: false,
+            confirmation_text: None,
             command_id: command_id.into(),
             command_type,
             operator_id: operator_id.into(),

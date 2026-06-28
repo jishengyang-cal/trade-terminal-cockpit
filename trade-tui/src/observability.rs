@@ -40,7 +40,10 @@ impl OtelTelemetry {
         tracer.in_span("trade_tui.state_projection", |cx| {
             let span = cx.span();
             span.set_attribute(KeyValue::new("cockpit.replay", replay));
-            span.set_attribute(KeyValue::new("cockpit.source", state.connection.nats.clone()));
+            span.set_attribute(KeyValue::new(
+                "cockpit.source",
+                state.connection.nats.clone(),
+            ));
             span.set_attribute(KeyValue::new(
                 "cockpit.account_id",
                 state.account.account_id.clone(),
@@ -61,20 +64,14 @@ impl OtelTelemetry {
         });
 
         let meter = global::meter("trade-tui");
-        meter
-            .u64_counter("tui_events_ingested_total")
-            .build()
-            .add(
-                state.connection.events_ingested,
-                &[KeyValue::new("source", state.connection.nats.clone())],
-            );
-        meter
-            .u64_counter("tui_events_coalesced_total")
-            .build()
-            .add(
-                state.connection.events_coalesced,
-                &[KeyValue::new("source", state.connection.nats.clone())],
-            );
+        meter.u64_counter("tui_events_ingested_total").build().add(
+            state.connection.events_ingested,
+            &[KeyValue::new("source", state.connection.nats.clone())],
+        );
+        meter.u64_counter("tui_events_coalesced_total").build().add(
+            state.connection.events_coalesced,
+            &[KeyValue::new("source", state.connection.nats.clone())],
+        );
         meter
             .u64_counter("tui_dropped_market_updates_total")
             .build()

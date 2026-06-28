@@ -89,6 +89,7 @@ impl Cli {
             source: self.source.clone(),
             from_ts_ns: parse_time_bound(self.from.as_deref(), "--from")?,
             to_ts_ns: parse_time_bound(self.to.as_deref(), "--to")?,
+            ..EventFilter::default()
         })
     }
 }

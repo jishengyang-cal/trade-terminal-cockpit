@@ -24,6 +24,17 @@ mod tests {
             producer: "trade-contracts-test".to_string(),
             schema_version: "trading.events.v1".to_string(),
             payload: Vec::new(),
+            stream: String::new(),
+            subject: String::new(),
+            partition_key: String::new(),
+            replay_id: String::new(),
+            environment: "paper".to_string(),
+            venue_ts_ns: None,
+            receive_ts_ns: None,
+            monotonic_ns: None,
+            trace_id: String::new(),
+            span_id: String::new(),
+            checksum: String::new(),
         };
 
         let mut bytes = Vec::new();

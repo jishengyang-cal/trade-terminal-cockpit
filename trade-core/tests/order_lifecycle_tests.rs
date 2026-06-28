@@ -1,10 +1,11 @@
 use trade_core::events::{
     CancelRejected, CancelRequested, CommandAuditRecorded, DomainEvent, EventEnvelope,
-    IntentCreated, OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade,
-    SignalGenerated, StrategyHeartbeat, StrategyPositionAttribution,
+    IntentCreated, OrderFill, OrderSubmitRequested, OrderSubmitted, PositionSnapshot,
+    RiskDecisionMade, RiskRuleEval, SignalGenerated, StrategyHeartbeat,
+    StrategyPositionAttribution,
 };
 use trade_core::state::OrderLifecycleState;
-use trade_core::{reduce_event, AppState};
+use trade_core::{reduce_event, AppState, Price};
 
 #[test]
 fn reconstructs_order_lifecycle_from_event_sequence() {
@@ -24,7 +25,7 @@ fn reconstructs_order_lifecycle_from_event_sequence() {
     assert_eq!(chain.strategy_id.as_deref(), Some("open-scalp"));
     assert_eq!(chain.symbol.as_deref(), Some("MU"));
     assert_eq!(chain.filled_quantity, 100);
-    assert!((chain.average_fill_price.unwrap() - 123.456).abs() < 0.0001);
+    assert!((chain.average_fill_price.as_ref().unwrap().as_f64() - 123.456).abs() < 0.0001);
     assert_eq!(chain.timeline.len(), 8);
     assert_eq!(chain.timeline[0].kind, "SIGNAL");
 
@@ -57,6 +58,7 @@ fn risk_rejection_blocks_chain_before_submit() {
                 side: "SELL_SHORT".to_string(),
                 quantity: 10,
                 reason: "book-imbalance".to_string(),
+                ..Default::default()
             }),
         ),
         EventEnvelope::new(
@@ -70,6 +72,7 @@ fn risk_rejection_blocks_chain_before_submit() {
                 symbol: "NVDA".to_string(),
                 approved: false,
                 reason_codes: vec!["short_permission=false".to_string()],
+                ..Default::default()
             }),
         ),
     ];
@@ -91,6 +94,117 @@ fn risk_rejection_blocks_chain_before_submit() {
 }
 
 #[test]
+fn duplicate_event_ids_are_idempotent() {
+    let mut state = AppState::default();
+    let event = EventEnvelope::new(
+        "evt-duplicate-001",
+        "corr-duplicate",
+        1,
+        "test",
+        DomainEvent::SignalGenerated(SignalGenerated {
+            correlation_id: "corr-duplicate".to_string(),
+            strategy_id: "open-scalp".to_string(),
+            symbol: "MU".to_string(),
+            signal_name: "gap_continuation".to_string(),
+            score: Some(0.82),
+            reason: "open-window".to_string(),
+            ..Default::default()
+        }),
+    );
+
+    reduce_event(&mut state, event.clone());
+    reduce_event(&mut state, event);
+
+    let strategy = state.strategies.by_id.get("open-scalp").unwrap();
+    assert_eq!(strategy.signals, 1);
+    assert_eq!(state.connection.events_ingested, 1);
+    assert_eq!(state.connection.duplicate_events, 1);
+}
+
+#[test]
+fn cumulative_fills_do_not_double_count_quantity() {
+    let mut state = AppState::default();
+    for (event_id, sequence, last_quantity, cumulative_quantity, remaining_quantity, price) in [
+        ("evt-fill-cumulative-001", 1, 40, 40, 60, 123.45),
+        ("evt-fill-cumulative-002", 2, 60, 100, 0, 123.46),
+    ] {
+        reduce_event(
+            &mut state,
+            EventEnvelope::new(
+                event_id,
+                "corr-fill-cumulative",
+                sequence,
+                "test",
+                DomainEvent::OrderFilled(OrderFill {
+                    correlation_id: "corr-fill-cumulative".to_string(),
+                    account_id: "paper-main".to_string(),
+                    order_id: "ord-fill-cumulative".to_string(),
+                    execution_id: Some(format!("exec-{sequence}")),
+                    filled_quantity: last_quantity,
+                    fill_price: Price::from_f64(price, "USD"),
+                    last_quantity: Some(last_quantity),
+                    cumulative_quantity: Some(cumulative_quantity),
+                    remaining_quantity: Some(remaining_quantity),
+                    ..Default::default()
+                }),
+            ),
+        );
+    }
+
+    let chain = state
+        .orders
+        .by_correlation_id
+        .get("corr-fill-cumulative")
+        .unwrap();
+    assert_eq!(chain.filled_quantity, 100);
+    assert_eq!(chain.remaining_quantity, Some(0));
+    assert!((chain.average_fill_price.as_ref().unwrap().as_f64() - 123.456).abs() < 0.0001);
+}
+
+#[test]
+fn risk_rule_evals_update_rule_table_and_dedupe_blocks() {
+    let mut state = AppState::default();
+    for sequence in [1, 2] {
+        reduce_event(
+            &mut state,
+            EventEnvelope::new(
+                format!("evt-risk-rule-{sequence}"),
+                "corr-risk-rule",
+                sequence,
+                "risk-engine",
+                DomainEvent::RiskDecisionMade(RiskDecisionMade {
+                    correlation_id: "corr-risk-rule".to_string(),
+                    strategy_id: "l1-l2-imbalance".to_string(),
+                    symbol: "NVDA".to_string(),
+                    approved: false,
+                    reason_codes: vec!["quote_staleness_ms".to_string()],
+                    decision_id: Some("risk-decision-001".to_string()),
+                    severity: Some("block".to_string()),
+                    evaluated_rules: vec![RiskRuleEval {
+                        rule_id: "quote_staleness_ms".to_string(),
+                        rule_name: "quote staleness".to_string(),
+                        passed: false,
+                        observed: "820".to_string(),
+                        threshold: "500".to_string(),
+                        unit: "ms".to_string(),
+                    }],
+                    risk_snapshot_id: Some("risk-snapshot-001".to_string()),
+                    authority_policy_version: Some("policy-v1".to_string()),
+                    ..Default::default()
+                }),
+            ),
+        );
+    }
+
+    assert_eq!(state.risk.structured_limits.len(), 2);
+    assert_eq!(state.risk.active_blocks.len(), 1);
+    let block = &state.risk.active_blocks[0];
+    assert_eq!(block.block_id, "risk-decision-001");
+    assert_eq!(block.rule_id, "quote_staleness_ms");
+    assert_eq!(block.scope, "l1-l2-imbalance/NVDA");
+}
+
+#[test]
 fn cancel_rejection_is_retained_in_order_lifecycle() {
     let mut state = AppState::default();
     let correlation_id = "corr-cancel-reject";
@@ -109,6 +223,7 @@ fn cancel_rejection_is_retained_in_order_lifecycle() {
                 signal_name: "gap_continuation".to_string(),
                 score: Some(0.82),
                 reason: "open-window".to_string(),
+                ..Default::default()
             }),
         ),
         EventEnvelope::new(
@@ -123,6 +238,7 @@ fn cancel_rejection_is_retained_in_order_lifecycle() {
                 side: "BUY".to_string(),
                 quantity: 100,
                 reason: "open-window".to_string(),
+                ..Default::default()
             }),
         ),
         EventEnvelope::new(
@@ -136,6 +252,7 @@ fn cancel_rejection_is_retained_in_order_lifecycle() {
                 symbol: "MU".to_string(),
                 approved: true,
                 reason_codes: vec!["quote_fresh=17ms".to_string()],
+                ..Default::default()
             }),
         ),
         EventEnvelope::new(
@@ -148,8 +265,9 @@ fn cancel_rejection_is_retained_in_order_lifecycle() {
                 account_id: account_id.to_string(),
                 order_id: order_id.to_string(),
                 order_type: "LMT".to_string(),
-                limit_price: Some(123.45),
+                limit_price: Some(Price::from_f64(123.45, "USD")),
                 tif: "DAY".to_string(),
+                ..Default::default()
             }),
         ),
         EventEnvelope::new(
@@ -162,6 +280,7 @@ fn cancel_rejection_is_retained_in_order_lifecycle() {
                 account_id: account_id.to_string(),
                 order_id: order_id.to_string(),
                 broker: "BROKER_SIM".to_string(),
+                ..Default::default()
             }),
         ),
         EventEnvelope::new(
@@ -226,12 +345,13 @@ fn position_unrealized_pnl_is_projection_only() {
                 account_id: "paper-main".to_string(),
                 symbol: "AMD".to_string(),
                 net_quantity: 50,
-                average_price: 165.10,
-                market_price: 164.92,
+                average_price: Price::from_f64(165.10, "USD"),
+                market_price: Price::from_f64(164.92, "USD"),
                 strategy_attribution: vec![StrategyPositionAttribution {
                     strategy_id: "l1-l2-imbalance".to_string(),
                     quantity: 50,
                 }],
+                ..Default::default()
             }),
         ),
     );
@@ -258,12 +378,13 @@ fn multi_account_positions_do_not_overwrite_account_matrix() {
                     account_id: account_id.to_string(),
                     symbol: "MU".to_string(),
                     net_quantity,
-                    average_price,
-                    market_price,
+                    average_price: Price::from_f64(average_price, "USD"),
+                    market_price: Price::from_f64(market_price, "USD"),
                     strategy_attribution: vec![StrategyPositionAttribution {
                         strategy_id: "open-scalp".to_string(),
                         quantity: net_quantity,
                     }],
+                    ..Default::default()
                 }),
             ),
         );
@@ -358,6 +479,7 @@ fn coalesces_high_frequency_projection_events_without_dropping_lifecycle_events(
                 signal_name: "gap_continuation".to_string(),
                 score: Some(0.82),
                 reason: "open-window".to_string(),
+                ..Default::default()
             }),
         ),
     );
@@ -375,6 +497,7 @@ fn coalesces_high_frequency_projection_events_without_dropping_lifecycle_events(
                 side: "BUY".to_string(),
                 quantity: 100,
                 reason: "open-window".to_string(),
+                ..Default::default()
             }),
         ),
     );

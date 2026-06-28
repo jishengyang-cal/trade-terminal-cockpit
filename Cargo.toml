@@ -33,6 +33,7 @@ futures-util = "0.3"
 opentelemetry = "0.31"
 opentelemetry_sdk = "0.31"
 opentelemetry-stdout = "0.31"
+sha2 = "0.10"
 
 trade-contracts = { path = "trade-contracts" }
 trade-core = { path = "trade-core" }

@@ -1,5 +1,7 @@
+use crate::events::RiskRuleEval;
+use crate::types::{LatencyBreakdown, Money, Price};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppState {
@@ -13,6 +15,10 @@ pub struct AppState {
     pub risk: RiskView,
     pub alerts: AlertStore,
     pub audit: EventRingBuffer,
+    #[serde(default, skip_serializing)]
+    pub seen_event_ids: BTreeSet<String>,
+    #[serde(default, skip_serializing)]
+    pub last_sequence_by_producer: BTreeMap<String, u64>,
 }
 
 impl Default for AppState {
@@ -27,6 +33,8 @@ impl Default for AppState {
             risk: RiskView::default(),
             alerts: AlertStore::default(),
             audit: EventRingBuffer::new(500),
+            seen_event_ids: BTreeSet::new(),
+            last_sequence_by_producer: BTreeMap::new(),
         }
     }
 }
@@ -45,6 +53,38 @@ pub struct ConnectionState {
     pub dropped_market_updates: u64,
     pub nats_reconnect_count: u64,
     pub command_roundtrip_ms: u64,
+    #[serde(default)]
+    pub duplicate_events: u64,
+    #[serde(default)]
+    pub out_of_order_events: u64,
+    #[serde(default)]
+    pub sequence_gaps: u64,
+    #[serde(default)]
+    pub event_backlog: u64,
+    #[serde(default)]
+    pub last_source_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub last_ingest_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub last_publish_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub source_to_ingest_lag_ms: Option<u64>,
+    #[serde(default)]
+    pub ingest_to_render_lag_ms: Option<u64>,
+    #[serde(default)]
+    pub clock_skew_ms: Option<i64>,
+    #[serde(default)]
+    pub stream_name: Option<String>,
+    #[serde(default)]
+    pub consumer_name: Option<String>,
+    #[serde(default)]
+    pub last_nats_subject: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub last_disconnect_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub last_reconnect_ts_ns: Option<i64>,
 }
 
 impl Default for ConnectionState {
@@ -62,6 +102,22 @@ impl Default for ConnectionState {
             dropped_market_updates: 0,
             nats_reconnect_count: 0,
             command_roundtrip_ms: 0,
+            duplicate_events: 0,
+            out_of_order_events: 0,
+            sequence_gaps: 0,
+            event_backlog: 0,
+            last_source_ts_ns: None,
+            last_ingest_ts_ns: None,
+            last_publish_ts_ns: None,
+            source_to_ingest_lag_ms: None,
+            ingest_to_render_lag_ms: None,
+            clock_skew_ms: None,
+            stream_name: None,
+            consumer_name: None,
+            last_nats_subject: None,
+            last_error: None,
+            last_disconnect_ts_ns: None,
+            last_reconnect_ts_ns: None,
         }
     }
 }
@@ -83,6 +139,40 @@ pub struct AccountView {
     pub short_intents_blocked_today: u64,
     #[serde(default)]
     pub runtime_controls: AccountRuntimeControls,
+    #[serde(default)]
+    pub account_currency: String,
+    #[serde(default)]
+    pub net_liquidation: Money,
+    #[serde(default)]
+    pub equity_with_loan: Money,
+    #[serde(default)]
+    pub initial_margin: Money,
+    #[serde(default)]
+    pub maintenance_margin: Money,
+    #[serde(default)]
+    pub excess_liquidity: Money,
+    #[serde(default)]
+    pub available_funds: Money,
+    #[serde(default)]
+    pub sma: Option<Money>,
+    #[serde(default)]
+    pub day_trades_remaining: Option<i32>,
+    #[serde(default)]
+    pub pdt_status: Option<String>,
+    #[serde(default)]
+    pub trading_restriction: Option<String>,
+    #[serde(default)]
+    pub settled_cash: Option<Money>,
+    #[serde(default)]
+    pub unsettled_cash: Option<Money>,
+    #[serde(default)]
+    pub gross_exposure: Money,
+    #[serde(default)]
+    pub net_exposure: Money,
+    #[serde(default)]
+    pub long_market_value: Money,
+    #[serde(default)]
+    pub short_market_value: Money,
 }
 
 impl Default for AccountView {
@@ -108,6 +198,23 @@ impl AccountView {
             short_permission: false,
             short_intents_blocked_today: 0,
             runtime_controls: AccountRuntimeControls::default(),
+            account_currency: "USD".to_string(),
+            net_liquidation: Money::default(),
+            equity_with_loan: Money::default(),
+            initial_margin: Money::default(),
+            maintenance_margin: Money::default(),
+            excess_liquidity: Money::default(),
+            available_funds: Money::default(),
+            sma: None,
+            day_trades_remaining: None,
+            pdt_status: None,
+            trading_restriction: None,
+            settled_cash: None,
+            unsettled_cash: None,
+            gross_exposure: Money::default(),
+            net_exposure: Money::default(),
+            long_market_value: Money::default(),
+            short_market_value: Money::default(),
         }
     }
 }
@@ -323,14 +430,70 @@ pub struct OrderChain {
     pub state: OrderLifecycleState,
     pub order_id: Option<String>,
     pub broker: Option<String>,
+    #[serde(default)]
+    pub client_order_id: Option<String>,
     pub broker_order_id: Option<String>,
+    #[serde(default)]
+    pub perm_id: Option<String>,
+    #[serde(default)]
+    pub parent_order_id: Option<String>,
+    #[serde(default)]
+    pub child_order_ids: Vec<String>,
     pub broker_status: Option<String>,
     pub order_type: Option<String>,
-    pub limit_price: Option<f64>,
+    pub limit_price: Option<Price>,
+    #[serde(default)]
+    pub stop_price: Option<Price>,
     pub tif: Option<String>,
+    #[serde(default)]
+    pub route: Option<String>,
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
+    pub destination: Option<String>,
+    #[serde(default)]
+    pub currency: String,
+    #[serde(default)]
+    pub submitted_quantity: Option<i64>,
+    #[serde(default)]
+    pub remaining_quantity: Option<i64>,
+    #[serde(default)]
+    pub cancelled_quantity: Option<i64>,
+    #[serde(default)]
+    pub rejected_quantity: Option<i64>,
     pub risk: Option<RiskDecisionView>,
     pub filled_quantity: i64,
-    pub average_fill_price: Option<f64>,
+    pub average_fill_price: Option<Price>,
+    #[serde(default)]
+    pub last_fill_price: Option<Price>,
+    #[serde(default)]
+    pub notional: Option<Money>,
+    #[serde(default)]
+    pub realized_pnl: Option<Money>,
+    #[serde(default)]
+    pub commission: Option<Money>,
+    #[serde(default)]
+    pub slippage_bps: Option<f64>,
+    #[serde(default)]
+    pub arrival_price: Option<Price>,
+    #[serde(default)]
+    pub decision_price: Option<Price>,
+    #[serde(default)]
+    pub submit_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub ack_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub first_fill_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub last_fill_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub terminal_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub latency: LatencyBreakdown,
+    #[serde(default)]
+    pub anomalies: Vec<String>,
+    #[serde(default)]
+    pub execution_ids: Vec<String>,
     pub timeline: Vec<TimelineEntry>,
 }
 
@@ -346,14 +509,42 @@ impl OrderChain {
             state: OrderLifecycleState::Observed,
             order_id: None,
             broker: None,
+            client_order_id: None,
             broker_order_id: None,
+            perm_id: None,
+            parent_order_id: None,
+            child_order_ids: Vec::new(),
             broker_status: None,
             order_type: None,
             limit_price: None,
+            stop_price: None,
             tif: None,
+            route: None,
+            exchange: None,
+            destination: None,
+            currency: "USD".to_string(),
+            submitted_quantity: None,
+            remaining_quantity: None,
+            cancelled_quantity: None,
+            rejected_quantity: None,
             risk: None,
             filled_quantity: 0,
             average_fill_price: None,
+            last_fill_price: None,
+            notional: None,
+            realized_pnl: None,
+            commission: None,
+            slippage_bps: None,
+            arrival_price: None,
+            decision_price: None,
+            submit_ts_ns: None,
+            ack_ts_ns: None,
+            first_fill_ts_ns: None,
+            last_fill_ts_ns: None,
+            terminal_ts_ns: None,
+            latency: LatencyBreakdown::default(),
+            anomalies: Vec::new(),
+            execution_ids: Vec::new(),
             timeline: Vec::new(),
         }
     }
@@ -373,15 +564,103 @@ impl OrderChain {
         });
     }
 
-    pub fn apply_fill(&mut self, quantity: i64, price: f64) {
+    pub fn transition_state(&mut self, next: OrderLifecycleState, event_id: &str, sequence: u64) {
+        if !is_valid_order_transition(&self.state, &next) {
+            self.anomalies.push(format!(
+                "invalid_transition {:?}->{:?} event_id={} sequence={}",
+                self.state, next, event_id, sequence
+            ));
+        }
+        self.state = next;
+    }
+
+    pub fn apply_fill(
+        &mut self,
+        execution_id: Option<&str>,
+        last_quantity: i64,
+        cumulative_quantity: Option<i64>,
+        remaining_quantity: Option<i64>,
+        price: Price,
+    ) -> bool {
+        if let Some(execution_id) = execution_id {
+            if self
+                .execution_ids
+                .iter()
+                .any(|existing| existing == execution_id)
+            {
+                self.anomalies
+                    .push(format!("duplicate_execution_id {execution_id}"));
+                return false;
+            }
+            self.execution_ids.push(execution_id.to_string());
+        }
+
         let previous_quantity = self.filled_quantity;
-        let previous_notional = self.average_fill_price.unwrap_or(0.0) * previous_quantity as f64;
-        let new_quantity = previous_quantity + quantity;
+        let new_quantity = cumulative_quantity.unwrap_or(previous_quantity + last_quantity);
+        let effective_last_quantity = if cumulative_quantity.is_some() {
+            new_quantity.saturating_sub(previous_quantity)
+        } else {
+            last_quantity
+        };
+
+        if let Some(cumulative_quantity) = cumulative_quantity {
+            if cumulative_quantity < previous_quantity {
+                self.anomalies.push(format!(
+                    "cumulative_fill_regressed previous={} next={}",
+                    previous_quantity, cumulative_quantity
+                ));
+            }
+        }
+
         if new_quantity > 0 {
-            let new_notional = previous_notional + price * quantity as f64;
-            self.average_fill_price = Some(new_notional / new_quantity as f64);
+            let previous_notional = self
+                .average_fill_price
+                .as_ref()
+                .map(|price| price.as_f64() * previous_quantity as f64)
+                .unwrap_or(0.0);
+            let new_notional = previous_notional + price.as_f64() * effective_last_quantity as f64;
+            self.average_fill_price = Some(Price::from_f64_with_scale(
+                new_notional / new_quantity as f64,
+                price.scale,
+                price.currency.clone(),
+            ));
         }
         self.filled_quantity = new_quantity;
+        self.remaining_quantity = remaining_quantity;
+        self.last_fill_price = Some(price);
+        true
+    }
+}
+
+fn is_valid_order_transition(current: &OrderLifecycleState, next: &OrderLifecycleState) -> bool {
+    use OrderLifecycleState::*;
+    match (current, next) {
+        (Observed, _)
+        | (SignalGenerated, IntentCreated)
+        | (SignalGenerated, RiskApproved)
+        | (SignalGenerated, RiskRejected)
+        | (IntentCreated, RiskPending)
+        | (IntentCreated, RiskApproved)
+        | (IntentCreated, RiskRejected)
+        | (RiskPending, RiskApproved)
+        | (RiskPending, RiskRejected)
+        | (RiskApproved, SubmitRequested)
+        | (SubmitRequested, SubmittedToBroker)
+        | (SubmittedToBroker, BrokerAckReceived)
+        | (BrokerAckReceived, PartiallyFilled)
+        | (BrokerAckReceived, Filled)
+        | (PartiallyFilled, PartiallyFilled)
+        | (PartiallyFilled, Filled)
+        | (SubmittedToBroker, CancelRequested)
+        | (BrokerAckReceived, CancelRequested)
+        | (PartiallyFilled, CancelRequested)
+        | (CancelRequested, CancelRejected)
+        | (CancelRequested, Cancelled)
+        | (SubmittedToBroker, BrokerRejected)
+        | (BrokerAckReceived, BrokerRejected) => true,
+        (Filled, Filled) | (Cancelled, Cancelled) | (BrokerRejected, BrokerRejected) => true,
+        _ if current == next => true,
+        _ => false,
     }
 }
 
@@ -410,6 +689,16 @@ pub enum OrderLifecycleState {
 pub struct RiskDecisionView {
     pub approved: bool,
     pub reason_codes: Vec<String>,
+    #[serde(default)]
+    pub severity: Option<String>,
+    #[serde(default)]
+    pub decision_id: Option<String>,
+    #[serde(default)]
+    pub risk_snapshot_id: Option<String>,
+    #[serde(default)]
+    pub evaluated_rules: Vec<RiskRuleEval>,
+    #[serde(default)]
+    pub authority_policy_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -437,8 +726,8 @@ pub struct PositionView {
     pub account_id: String,
     pub symbol: String,
     pub net_quantity: i64,
-    pub average_price: f64,
-    pub market_price: f64,
+    pub average_price: Price,
+    pub market_price: Price,
     pub unrealized_pnl: f64,
     pub strategy_attribution: Vec<StrategyPositionView>,
 }
@@ -459,6 +748,8 @@ pub struct RiskView {
     pub quote_staleness_ok: bool,
     pub short_permission: bool,
     pub limits: BTreeMap<String, String>,
+    #[serde(default)]
+    pub structured_limits: Vec<RiskLimitView>,
     pub active_blocks: Vec<RiskBlock>,
 }
 
@@ -479,16 +770,45 @@ impl Default for RiskView {
             quote_staleness_ok: true,
             short_permission: false,
             limits,
+            structured_limits: Vec::new(),
             active_blocks: Vec::new(),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RiskLimitView {
+    pub rule_id: String,
+    pub scope: String,
+    pub metric: String,
+    pub observed: String,
+    pub limit: String,
+    pub unit: String,
+    pub status: String,
+    pub updated_ts_ns: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RiskBlock {
+    #[serde(default)]
+    pub block_id: String,
+    #[serde(default)]
+    pub rule_id: String,
     pub scope: String,
     pub severity: String,
     pub message: String,
+    #[serde(default)]
+    pub first_seen_ts_ns: i64,
+    #[serde(default)]
+    pub last_seen_ts_ns: i64,
+    #[serde(default)]
+    pub cleared_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub correlation_id: Option<String>,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub strategy_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

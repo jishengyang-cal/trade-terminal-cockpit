@@ -70,16 +70,31 @@ message OrderTimeline {
   string order_id = 8;
   string broker_order_id = 9;
   int64 filled_quantity = 10;
-  optional double average_fill_price = 11;
+  Price average_fill_price = 11;
   repeated OrderTimelineEntry timeline = 12;
+  string client_order_id = 13;
+  string perm_id = 14;
+  string route = 15;
+  string exchange = 16;
+  string destination = 17;
+  optional int64 submitted_quantity = 18;
+  optional int64 remaining_quantity = 19;
+  Price last_fill_price = 20;
+  optional int64 submit_ts_ns = 21;
+  optional int64 ack_ts_ns = 22;
+  optional int64 first_fill_ts_ns = 23;
+  optional int64 last_fill_ts_ns = 24;
+  optional int64 terminal_ts_ns = 25;
+  LatencyBreakdown latency = 26;
+  repeated string anomalies = 27;
 }
 
 message PositionProjection {
   string account_id = 1;
   string symbol = 2;
   int64 net_quantity = 3;
-  double average_price = 4;
-  double market_price = 5;
+  Price average_price = 4;
+  Price market_price = 5;
   double unrealized_pnl = 6;
   repeated StrategyPositionAttribution strategy_attribution = 7;
 }
@@ -88,6 +103,25 @@ message RiskBlock {
   string scope = 1;
   string severity = 2;
   string message = 3;
+  string block_id = 4;
+  string rule_id = 5;
+  int64 first_seen_ts_ns = 6;
+  int64 last_seen_ts_ns = 7;
+  optional int64 cleared_ts_ns = 8;
+  string correlation_id = 9;
+  string symbol = 10;
+  string strategy_id = 11;
+}
+
+message RiskLimitView {
+  string rule_id = 1;
+  string scope = 2;
+  string metric = 3;
+  string observed = 4;
+  string limit = 5;
+  string unit = 6;
+  string status = 7;
+  int64 updated_ts_ns = 8;
 }
 
 message RiskSnapshot {
@@ -99,6 +133,7 @@ message RiskSnapshot {
   bool quote_staleness_ok = 6;
   bool short_permission = 7;
   repeated RiskBlock active_blocks = 8;
+  repeated RiskLimitView structured_limits = 9;
 }
 
 message AlertProjection {
@@ -126,13 +161,26 @@ message TerminalProjectionSnapshot {
 }
 
 message EventFilter {
-  string strategy_id = 1;
-  string symbol = 2;
-  string order_id = 3;
-  string correlation_id = 4;
-  string event_type = 5;
-  string severity = 6;
-  string source = 7;
-  int64 from_ts_ns = 8;
-  int64 to_ts_ns = 9;
+  string account_id = 1;
+  string strategy_id = 2;
+  string symbol = 3;
+  string order_id = 4;
+  string broker_order_id = 5;
+  string perm_id = 6;
+  string command_id = 7;
+  string correlation_id = 8;
+  string event_type = 9;
+  string severity = 10;
+  string source = 11;
+  string producer = 12;
+  string stream = 13;
+  string subject = 14;
+  uint64 min_sequence = 15;
+  uint64 max_sequence = 16;
+  string state = 17;
+  string risk_rule_id = 18;
+  string venue = 19;
+  string route = 20;
+  int64 from_ts_ns = 21;
+  int64 to_ts_ns = 22;
 }

@@ -127,6 +127,27 @@ combination. Account-scoped commands require
 `--broker-account-slot ACCOUNT_ID=SLOT` at the gateway; the frontend never
 guesses slot mappings.
 
+## Trading Evidence Model
+
+Core trading evidence avoids naked floating-point prices in order lifecycle
+state. `trade-core` exposes `Price` and `Money` fixed-scale structs, while JSON
+deserialization remains backward-compatible with existing numeric fixtures.
+
+Order chains retain broker and routing evidence such as `client_order_id`,
+`broker_order_id`, `perm_id`, route/exchange/destination, submitted and
+remaining quantity, fill execution IDs, cumulative fill quantity, latency
+timestamps, and lifecycle anomalies. Reducer state is idempotent by `event_id`
+and records duplicate, out-of-order, and sequence-gap counters.
+
+Risk decisions can carry evaluated rule snapshots. The reducer projects those
+into structured rule rows and deduplicated active blocks, so Risk is a current
+state surface rather than a growing log tail.
+
+`tradectl evidence-bundle` includes filtered events/commands, rebuilt
+projection state, input file SHA-256 hashes, event ID counts, duplicate counts,
+sequence gap counts, schema versions, generator name, and best-effort git
+commit metadata.
+
 ## Tailnet Access
 
 Tailnet access is auxiliary remote-operator documentation only. It is not the

@@ -5,6 +5,7 @@ pub mod projection;
 pub mod reducer;
 pub mod sample;
 pub mod state;
+pub mod types;
 
 pub use commands::{CommandEnvelope, CommandPayload, DangerLevel};
 pub use events::{DomainEvent, EventEnvelope};
@@ -12,6 +13,7 @@ pub use filter::EventFilter;
 pub use projection::{apply_projection_snapshot, ProjectionSnapshot};
 pub use reducer::reduce_event;
 pub use state::AppState;
+pub use types::{LatencyBreakdown, Money, Price};
 
 pub fn unix_ts_ns() -> i64 {
     std::time::SystemTime::now()

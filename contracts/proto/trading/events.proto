@@ -18,6 +18,17 @@ message EventEnvelope {
   string producer = 11;
   string schema_version = 12;
   bytes payload = 13;
+  string stream = 14;
+  string subject = 15;
+  string partition_key = 16;
+  string replay_id = 17;
+  string environment = 18;
+  optional int64 venue_ts_ns = 19;
+  optional int64 receive_ts_ns = 20;
+  optional int64 monotonic_ns = 21;
+  string trace_id = 22;
+  string span_id = 23;
+  string checksum = 24;
 }
 
 message StrategyHeartbeat {
@@ -41,6 +52,22 @@ message SignalGenerated {
   string signal_name = 4;
   optional double score = 5;
   string reason = 6;
+  string account_id = 7;
+  string side_hint = 8;
+  optional uint64 horizon_ms = 9;
+  optional double expected_edge_bps = 10;
+  optional double confidence = 11;
+  string feature_version = 12;
+  string model_version = 13;
+  string market_snapshot_id = 14;
+  Price reference_price = 15;
+  Price bid_price = 16;
+  Price ask_price = 17;
+  optional double spread_bps = 18;
+  optional double imbalance = 19;
+  Price microprice = 20;
+  optional double volatility_bps = 21;
+  optional double liquidity_score = 22;
 }
 
 message IntentCreated {
@@ -50,6 +77,21 @@ message IntentCreated {
   OrderSide side = 4;
   int64 quantity = 5;
   string reason = 6;
+  string account_id = 7;
+  string intent_id = 8;
+  string parent_intent_id = 9;
+  string instrument_id = 10;
+  string asset_class = 11;
+  string currency = 12;
+  string quantity_type = 13;
+  Money notional = 14;
+  Price limit_price_hint = 15;
+  Price stop_price_hint = 16;
+  string time_in_force_hint = 17;
+  string urgency = 18;
+  string position_effect = 19;
+  optional double max_slippage_bps = 20;
+  optional int64 expires_at_ns = 21;
 }
 
 message RiskDecisionMade {
@@ -58,6 +100,21 @@ message RiskDecisionMade {
   string symbol = 3;
   RiskDecision decision = 4;
   repeated string reason_codes = 5;
+  string decision_id = 6;
+  string intent_id = 7;
+  string severity = 8;
+  repeated RiskRuleEval evaluated_rules = 9;
+  string risk_snapshot_id = 10;
+  Money account_day_pnl = 11;
+  Money strategy_day_pnl = 12;
+  Money symbol_exposure = 13;
+  Money account_exposure = 14;
+  optional int64 remaining_trade_budget = 15;
+  Money remaining_loss_budget = 16;
+  optional uint64 market_data_age_ms = 17;
+  optional uint64 quote_staleness_ms = 18;
+  optional bool short_permission = 19;
+  string authority_policy_version = 20;
 }
 
 message OrderSubmitRequested {
@@ -65,8 +122,30 @@ message OrderSubmitRequested {
   string account_id = 2;
   string order_id = 3;
   string order_type = 4;
-  optional double limit_price = 5;
+  Price limit_price_value = 5;
   string tif = 6;
+  string client_order_id = 7;
+  string broker_order_id = 8;
+  string perm_id = 9;
+  string parent_order_id = 10;
+  string oca_group = 11;
+  string route = 12;
+  string destination = 13;
+  string exchange = 14;
+  string order_ref = 15;
+  OrderSide side = 16;
+  optional int64 quantity = 17;
+  optional int64 remaining_quantity = 18;
+  Price stop_price = 19;
+  Price aux_price = 20;
+  bool outside_rth = 21;
+  bool extended_hours = 22;
+  bool allow_preopen = 23;
+  bool allow_after_hours = 24;
+  optional int64 min_qty = 25;
+  optional int64 display_size = 26;
+  Price discretionary_amount = 27;
+  bool transmit = 28;
 }
 
 message OrderSubmitted {
@@ -74,6 +153,12 @@ message OrderSubmitted {
   string account_id = 2;
   string order_id = 3;
   string broker = 4;
+  string client_order_id = 5;
+  string broker_order_id = 6;
+  string perm_id = 7;
+  string route = 8;
+  string exchange = 9;
+  string destination = 10;
 }
 
 message BrokerAckReceived {
@@ -82,6 +167,9 @@ message BrokerAckReceived {
   string order_id = 3;
   string broker_order_id = 4;
   string broker_status = 5;
+  string perm_id = 6;
+  optional int64 remaining_quantity = 7;
+  optional int64 receive_ts_ns = 8;
 }
 
 message OrderFill {
@@ -89,7 +177,26 @@ message OrderFill {
   string account_id = 2;
   string order_id = 3;
   int64 filled_quantity = 4;
-  double fill_price = 5;
+  Price fill_price = 5;
+  string execution_id = 6;
+  string broker_execution_id = 7;
+  optional int64 last_quantity = 8;
+  optional int64 cumulative_quantity = 9;
+  optional int64 remaining_quantity = 10;
+  Price last_price = 11;
+  Price average_price = 12;
+  string venue = 13;
+  string liquidity = 14;
+  Money commission = 15;
+  repeated Fee fees = 16;
+  optional int64 trade_ts_ns = 17;
+  optional int64 report_ts_ns = 18;
+  string settlement_currency = 19;
+}
+
+message Fee {
+  string name = 1;
+  Money amount = 2;
 }
 
 message CancelRequested {
@@ -123,8 +230,8 @@ message PositionSnapshot {
   string account_id = 1;
   string symbol = 2;
   int64 net_quantity = 3;
-  double average_price = 4;
-  double market_price = 5;
+  Price average_price = 4;
+  Price market_price = 5;
   repeated StrategyPositionAttribution strategy_attribution = 6;
 }
 
@@ -132,6 +239,14 @@ message RiskLimitBreached {
   string scope = 1;
   string severity = 2;
   string message = 3;
+  string block_id = 4;
+  string rule_id = 5;
+  optional int64 first_seen_ts_ns = 6;
+  optional int64 last_seen_ts_ns = 7;
+  optional int64 cleared_ts_ns = 8;
+  string correlation_id = 9;
+  string symbol = 10;
+  string strategy_id = 11;
 }
 
 message AlertRaised {

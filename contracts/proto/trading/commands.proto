@@ -22,6 +22,19 @@ message CommandEnvelope {
   string capability = 10;
   DangerLevel danger_level = 11;
   bytes payload = 12;
+  string idempotency_key = 13;
+  optional int64 expires_at_ns = 14;
+  bool dry_run = 15;
+  string source = 16;
+  string host_id = 17;
+  string terminal_session_id = 18;
+  string approval_id = 19;
+  string authority_policy_version = 20;
+  string requested_by_role = 21;
+  string target_environment = 22;
+  bool requires_mfa = 23;
+  string confirmation_text = 24;
+  string command_hash = 25;
 }
 
 message PauseStrategyRequested {

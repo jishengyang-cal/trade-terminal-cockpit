@@ -261,8 +261,8 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .split(area);
 
     let mut rows = vec![format!(
-        "  {:<12} {:<7} {:<10} {:<4} {:>4}",
-        "CORR", "STATE", "ACCT", "SYM", "FILL"
+        "  {:<10} {:<7} {:<8} {:<5} {:<4} {:>9} {:<6} {:<10} {:>7}",
+        "CORR", "STATE", "ACCT", "SIDE", "SYM", "FILL/REM", "TYPE", "BRK_STAT", "ACK_MS"
     )];
     for (index, chain) in state
         .orders
@@ -277,13 +277,103 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
     let timeline = selected_chain(state, &app.search_query, app.selected_order_index)
         .map(|chain| {
+            let anomalies = if chain.anomalies.is_empty() {
+                "-".to_string()
+            } else {
+                chain.anomalies.join(";")
+            };
             let mut lines = vec![
                 kv_wide("correlation_id", &chain.correlation_id),
                 kv_wide("state", &format!("{:?}", chain.state)),
                 kv_wide("order_id", chain.order_id.as_deref().unwrap_or("-")),
+                kv_wide(
+                    "client_order_id",
+                    chain.client_order_id.as_deref().unwrap_or("-"),
+                ),
+                kv_wide(
+                    "broker_order_id",
+                    chain.broker_order_id.as_deref().unwrap_or("-"),
+                ),
+                kv_wide("perm_id", chain.perm_id.as_deref().unwrap_or("-")),
                 kv_wide("symbol", chain.symbol.as_deref().unwrap_or("-")),
                 kv_wide("side", chain.side.as_deref().unwrap_or("-")),
+                kv_wide("order_type", chain.order_type.as_deref().unwrap_or("-")),
+                kv_wide("limit", &format_optional_price(chain.limit_price.as_ref())),
+                kv_wide("route", chain.route.as_deref().unwrap_or("-")),
+                kv_wide("exchange", chain.exchange.as_deref().unwrap_or("-")),
+                kv_wide(
+                    "broker_status",
+                    chain.broker_status.as_deref().unwrap_or("-"),
+                ),
                 kv_wide("filled_qty", &chain.filled_quantity.to_string()),
+                kv_wide(
+                    "remaining_qty",
+                    &chain
+                        .remaining_quantity
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "avg_fill",
+                    &format_optional_price(chain.average_fill_price.as_ref()),
+                ),
+                kv_wide(
+                    "last_fill",
+                    &format_optional_price(chain.last_fill_price.as_ref()),
+                ),
+                kv_wide(
+                    "submit_ts_ns",
+                    &chain
+                        .submit_ts_ns
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "ack_ts_ns",
+                    &chain
+                        .ack_ts_ns
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "first_fill_ts_ns",
+                    &chain
+                        .first_fill_ts_ns
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "terminal_ts_ns",
+                    &chain
+                        .terminal_ts_ns
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "submit_to_ack_ms",
+                    &chain
+                        .latency
+                        .submit_to_ack_ms
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "ack_to_fill_ms",
+                    &chain
+                        .latency
+                        .ack_to_first_fill_ms
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "submit_to_term_ms",
+                    &chain
+                        .latency
+                        .submit_to_terminal_ms
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide("anomalies", &anomalies),
                 String::new(),
             ];
             for entry in &chain.timeline {
@@ -313,12 +403,12 @@ fn render_positions(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             .collect::<Vec<_>>()
             .join(", ");
         lines.push(format!(
-            "{:<14} {:<8} {:>8} {:>10.2} {:>10.2} {:>+10.2}  {}",
+            "{:<14} {:<8} {:>8} {:>10} {:>10} {:>+10.2}  {}",
             truncate(&position.account_id, 14),
             position.symbol,
             position.net_quantity,
-            position.average_price,
-            position.market_price,
+            position.average_price.display_value(),
+            position.market_price.display_value(),
             position.unrealized_pnl,
             attribution,
         ));
@@ -359,8 +449,25 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
         String::new(),
         "LIMITS".to_string(),
     ];
-    for (key, value) in &state.risk.limits {
-        global.push(kv_wide(key, value));
+    if state.risk.structured_limits.is_empty() {
+        for (key, value) in &state.risk.limits {
+            global.push(kv_wide(key, value));
+        }
+    } else {
+        global.push(format!(
+            "{:<16} {:<10} {:>10} {:>10} {:<6}",
+            "RULE", "SCOPE", "OBSERVED", "LIMIT", "STATUS"
+        ));
+        for limit in state.risk.structured_limits.iter().rev().take(10).rev() {
+            global.push(format!(
+                "{:<16} {:<10} {:>10} {:>10} {:<6}",
+                truncate(&limit.rule_id, 16),
+                truncate(&limit.scope, 10),
+                truncate(&limit.observed, 10),
+                truncate(&limit.limit, 10),
+                truncate(&limit.status, 6)
+            ));
+        }
     }
     frame.render_widget(panel("Global Risk", global), sections[0]);
 
@@ -395,8 +502,8 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         for block in &state.risk.active_blocks {
             blocks.push(format!(
-                "{} / {} / {}",
-                block.scope, block.severity, block.message
+                "{} / {} / {} / {}",
+                block.scope, block.rule_id, block.severity, block.message
             ));
         }
     }
@@ -736,14 +843,30 @@ fn strategy_detail_lines(strategy: &StrategyView) -> Vec<String> {
 }
 
 fn format_order_row(chain: &OrderChain, selected: bool) -> String {
-    format!(
-        "{} {:<12} {:<7} {:<10} {:<4} {:>4}",
-        if selected { ">" } else { " " },
-        truncate(&chain.correlation_id, 12),
-        truncate(&format!("{:?}", chain.state), 7),
-        truncate(chain.account_id.as_deref().unwrap_or("-"), 10),
-        truncate(chain.symbol.as_deref().unwrap_or("-"), 4),
+    let fill_remaining = format!(
+        "{}/{}",
         chain.filled_quantity,
+        chain
+            .remaining_quantity
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    );
+    format!(
+        "{} {:<10} {:<7} {:<8} {:<5} {:<4} {:>9} {:<6} {:<10} {:>7}",
+        if selected { ">" } else { " " },
+        truncate(&chain.correlation_id, 10),
+        truncate(&format!("{:?}", chain.state), 7),
+        truncate(chain.account_id.as_deref().unwrap_or("-"), 8),
+        truncate(chain.side.as_deref().unwrap_or("-"), 5),
+        truncate(chain.symbol.as_deref().unwrap_or("-"), 4),
+        fill_remaining,
+        truncate(chain.order_type.as_deref().unwrap_or("-"), 6),
+        truncate(chain.broker_status.as_deref().unwrap_or("-"), 10),
+        chain
+            .latency
+            .submit_to_ack_ms
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
     )
 }
 
@@ -859,4 +982,10 @@ fn kv_wide(label: &str, value: &str) -> String {
 
 fn kv_narrow(label: &str, value: &str) -> String {
     format!("{:<6} {}", truncate(label, 6), truncate(value, 21))
+}
+
+fn format_optional_price(price: Option<&trade_core::Price>) -> String {
+    price
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_string())
 }

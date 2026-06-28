@@ -1,10 +1,13 @@
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use trade_core::{
     reduce_event, AppState, CommandEnvelope, CommandPayload, EventEnvelope, EventFilter,
 };
@@ -104,13 +107,25 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         output_json: Option<PathBuf>,
         #[arg(long)]
+        account_id: Option<String>,
+        #[arg(long)]
         correlation_id: Option<String>,
         #[arg(long)]
         order_id: Option<String>,
         #[arg(long)]
+        broker_order_id: Option<String>,
+        #[arg(long)]
+        perm_id: Option<String>,
+        #[arg(long)]
+        command_id: Option<String>,
+        #[arg(long)]
         strategy_id: Option<String>,
         #[arg(long)]
         symbol: Option<String>,
+        #[arg(long)]
+        stream: Option<String>,
+        #[arg(long)]
+        subject: Option<String>,
     },
 }
 
@@ -120,17 +135,29 @@ fn main() -> Result<()> {
         event_jsonl,
         audit_jsonl,
         output_json,
+        account_id,
         correlation_id,
         order_id,
+        broker_order_id,
+        perm_id,
+        command_id,
         strategy_id,
         symbol,
+        stream,
+        subject,
     } = &cli.command
     {
         let filter = EventFilter {
+            account_id: account_id.clone(),
             strategy_id: strategy_id.clone(),
             symbol: symbol.clone(),
             order_id: order_id.clone(),
+            broker_order_id: broker_order_id.clone(),
+            perm_id: perm_id.clone(),
+            command_id: command_id.clone(),
             correlation_id: correlation_id.clone(),
+            stream: stream.clone(),
+            subject: subject.clone(),
             ..EventFilter::default()
         };
         let bundle = build_evidence_bundle(event_jsonl, audit_jsonl.as_deref(), filter)?;
@@ -183,7 +210,15 @@ fn main() -> Result<()> {
 struct EvidenceBundle {
     schema_version: String,
     generated_ts_ns: i64,
+    generated_by: String,
+    git_commit: Option<String>,
     filters: EventFilter,
+    input_files: Vec<EvidenceInput>,
+    input_hashes: Vec<String>,
+    event_id_count: usize,
+    duplicate_event_count: usize,
+    sequence_gap_count: u64,
+    schema_versions: Vec<String>,
     event_count: usize,
     command_count: usize,
     projection: AppState,
@@ -191,11 +226,27 @@ struct EvidenceBundle {
     commands: Vec<CommandEnvelope>,
 }
 
+#[derive(Debug, Serialize)]
+struct EvidenceInput {
+    path: String,
+    sha256: String,
+    bytes: u64,
+}
+
 fn build_evidence_bundle(
     event_jsonl: &Path,
     audit_jsonl: Option<&Path>,
     filter: EventFilter,
 ) -> Result<EvidenceBundle> {
+    let mut input_files = vec![evidence_input(event_jsonl)?];
+    if let Some(path) = audit_jsonl {
+        input_files.push(evidence_input(path)?);
+    }
+    let input_hashes = input_files
+        .iter()
+        .map(|input| input.sha256.clone())
+        .collect::<Vec<_>>();
+
     let events = read_event_jsonl(event_jsonl)?
         .into_iter()
         .filter(|event| filter.matches(event))
@@ -205,6 +256,16 @@ fn build_evidence_bundle(
     for event in events.iter().cloned() {
         reduce_event(&mut projection, event);
     }
+    let event_ids = events
+        .iter()
+        .map(|event| event.event_id.clone())
+        .collect::<BTreeSet<_>>();
+    let schema_versions = events
+        .iter()
+        .map(|event| event.schema_version.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
 
     let commands = if let Some(path) = audit_jsonl {
         read_command_jsonl(path)?
@@ -218,12 +279,30 @@ fn build_evidence_bundle(
     Ok(EvidenceBundle {
         schema_version: "trading.evidence.v1".to_string(),
         generated_ts_ns: trade_core::unix_ts_ns(),
+        generated_by: "tradectl evidence-bundle".to_string(),
+        git_commit: git_commit(),
         filters: filter,
+        input_files,
+        input_hashes,
+        event_id_count: event_ids.len(),
+        duplicate_event_count: projection.connection.duplicate_events as usize,
+        sequence_gap_count: projection.connection.sequence_gaps,
+        schema_versions,
         event_count: events.len(),
         command_count: commands.len(),
         projection,
         events,
         commands,
+    })
+}
+
+fn evidence_input(path: &Path) -> Result<EvidenceInput> {
+    let bytes = fs::read(path)?;
+    let digest = Sha256::digest(&bytes);
+    Ok(EvidenceInput {
+        path: path.display().to_string(),
+        sha256: format!("{digest:x}"),
+        bytes: bytes.len() as u64,
     })
 }
 
@@ -267,8 +346,18 @@ fn read_command_jsonl(path: &Path) -> Result<Vec<CommandEnvelope>> {
 }
 
 fn command_matches_filter(command: &CommandEnvelope, filter: &EventFilter) -> bool {
+    if let Some(command_id) = filter.command_id.as_deref() {
+        if command.command_id != command_id {
+            return false;
+        }
+    }
     if let Some(correlation_id) = filter.correlation_id.as_deref() {
         if command.correlation_id != correlation_id {
+            return false;
+        }
+    }
+    if let Some(account_id) = filter.account_id.as_deref() {
+        if !command.aggregate_id.contains(account_id) {
             return false;
         }
     }
@@ -288,6 +377,17 @@ fn command_matches_filter(command: &CommandEnvelope, filter: &EventFilter) -> bo
         }
     }
     true
+}
+
+fn git_commit() -> Option<String> {
+    ProcessCommand::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn required_global(value: Option<String>, name: &str) -> Result<String> {

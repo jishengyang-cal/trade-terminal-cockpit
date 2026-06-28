@@ -4,7 +4,7 @@ use trade_core::state::{
     AccountView, AlertView, AppState, OrderChain, OrderLifecycleState, PositionView, RiskView,
     StrategyPositionView, StrategyRiskGateView, StrategyView,
 };
-use trade_core::{apply_projection_snapshot, reduce_event, ProjectionSnapshot};
+use trade_core::{apply_projection_snapshot, reduce_event, Price, ProjectionSnapshot};
 
 #[test]
 fn projection_snapshot_initializes_trade_cockpit_state() {
@@ -43,7 +43,11 @@ fn events_continue_from_loaded_projection_snapshot() {
                 account_id: "paper-main".to_string(),
                 order_id: "ord-snap-001".to_string(),
                 filled_quantity: 50,
-                fill_price: 124.10,
+                fill_price: Price::from_f64(124.10, "USD"),
+                last_quantity: Some(50),
+                cumulative_quantity: Some(100),
+                remaining_quantity: Some(0),
+                ..Default::default()
             }),
         ),
     );
@@ -56,7 +60,7 @@ fn events_continue_from_loaded_projection_snapshot() {
         .last()
         .unwrap()
         .summary
-        .contains("50 @ 124.1000"));
+        .contains("50 @ 124.1000 USD"));
     assert_eq!(state.connection.last_event_sequence, Some(42));
 }
 
@@ -70,7 +74,7 @@ fn sample_snapshot() -> ProjectionSnapshot {
     chain.state = OrderLifecycleState::PartiallyFilled;
     chain.order_id = Some("ord-snap-001".to_string());
     chain.filled_quantity = 50;
-    chain.average_fill_price = Some(123.45);
+    chain.average_fill_price = Some(Price::from_f64(123.45, "USD"));
     chain.push_timeline(41, 41_000, "PARTIAL_FILL", "50 @ 123.4500");
 
     ProjectionSnapshot {
@@ -93,6 +97,7 @@ fn sample_snapshot() -> ProjectionSnapshot {
             short_permission: false,
             short_intents_blocked_today: 2,
             runtime_controls: Default::default(),
+            ..AccountView::new("paper-main")
         }),
         accounts: Vec::new(),
         strategies: vec![StrategyView {
@@ -126,8 +131,8 @@ fn sample_snapshot() -> ProjectionSnapshot {
             account_id: "paper-main".to_string(),
             symbol: "MU".to_string(),
             net_quantity: 50,
-            average_price: 123.45,
-            market_price: 123.70,
+            average_price: Price::from_f64(123.45, "USD"),
+            market_price: Price::from_f64(123.70, "USD"),
             unrealized_pnl: 12.50,
             strategy_attribution: vec![StrategyPositionView {
                 strategy_id: "open-scalp".to_string(),

@@ -54,3 +54,33 @@ message StrategyPositionAttribution {
   string strategy_id = 1;
   int64 quantity = 2;
 }
+
+message Price {
+  int64 value = 1;
+  int32 scale = 2;
+  string currency = 3;
+}
+
+message Money {
+  int64 value = 1;
+  int32 scale = 2;
+  string currency = 3;
+}
+
+message LatencyBreakdown {
+  optional uint64 signal_to_intent_ms = 1;
+  optional uint64 intent_to_risk_ms = 2;
+  optional uint64 risk_to_submit_ms = 3;
+  optional uint64 submit_to_ack_ms = 4;
+  optional uint64 ack_to_first_fill_ms = 5;
+  optional uint64 submit_to_terminal_ms = 6;
+}
+
+message RiskRuleEval {
+  string rule_id = 1;
+  string rule_name = 2;
+  bool passed = 3;
+  string observed = 4;
+  string threshold = 5;
+  string unit = 6;
+}
