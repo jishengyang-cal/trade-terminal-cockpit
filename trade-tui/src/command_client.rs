@@ -1,6 +1,9 @@
 use crate::cli::Cli;
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::Command;
 use trade_core::{CommandEnvelope, CommandPayload, EventEnvelope};
@@ -16,12 +19,17 @@ pub struct CommandClientConfig {
     pub session_id: String,
     pub reason: String,
     pub gateway_bin: PathBuf,
+    pub gateway_addr: Option<String>,
     pub audit_jsonl: PathBuf,
     pub allow_dangerous: bool,
     pub execute_broker_control: bool,
     pub broker_runtime_dir: Option<PathBuf>,
     pub broker_control_bin: Option<PathBuf>,
     pub broker_account_slots: Vec<String>,
+    pub risk_check_bin: Option<PathBuf>,
+    pub strategy_control_bin: Option<PathBuf>,
+    pub order_gateway_bin: Option<PathBuf>,
+    pub alert_service_bin: Option<PathBuf>,
     pub target_environment: String,
 }
 
@@ -48,12 +56,20 @@ impl CommandClient {
                     .clone()
                     .or_else(|| std::env::var_os("COMMAND_GATEWAY_BIN").map(PathBuf::from))
                     .unwrap_or_else(default_gateway_bin),
+                gateway_addr: cli
+                    .command_gateway_addr
+                    .clone()
+                    .or_else(|| std::env::var("COMMAND_GATEWAY_ADDR").ok()),
                 audit_jsonl: cli.command_gateway_audit_jsonl.clone(),
                 allow_dangerous: cli.command_gateway_allow_dangerous,
                 execute_broker_control: cli.command_gateway_execute_broker_control,
                 broker_runtime_dir: cli.broker_runtime_dir.clone(),
                 broker_control_bin: cli.broker_control_bin.clone(),
                 broker_account_slots: cli.broker_account_slots.clone(),
+                risk_check_bin: cli.risk_check_bin.clone(),
+                strategy_control_bin: cli.strategy_control_bin.clone(),
+                order_gateway_bin: cli.order_gateway_bin.clone(),
+                alert_service_bin: cli.alert_service_bin.clone(),
                 target_environment: cli.target_environment.clone(),
             },
         }
@@ -88,6 +104,10 @@ impl CommandClient {
         let command_json = command_json_path(&command_id)?;
         write_command_json(&command_json, &envelope)?;
 
+        if let Some(addr) = self.config.gateway_addr.as_deref() {
+            return self.submit_tcp(addr, &envelope);
+        }
+
         let mut process = Command::new(&self.config.gateway_bin);
         process
             .arg("--command-json")
@@ -108,6 +128,18 @@ impl CommandClient {
         }
         for mapping in &self.config.broker_account_slots {
             process.arg("--broker-account-slot").arg(mapping);
+        }
+        if let Some(path) = &self.config.risk_check_bin {
+            process.arg("--risk-check-bin").arg(path);
+        }
+        if let Some(path) = &self.config.strategy_control_bin {
+            process.arg("--strategy-control-bin").arg(path);
+        }
+        if let Some(path) = &self.config.order_gateway_bin {
+            process.arg("--order-gateway-bin").arg(path);
+        }
+        if let Some(path) = &self.config.alert_service_bin {
+            process.arg("--alert-service-bin").arg(path);
         }
 
         let output = process.output().with_context(|| {
@@ -139,6 +171,41 @@ impl CommandClient {
             events,
         })
     }
+
+    fn submit_tcp(&self, addr: &str, envelope: &CommandEnvelope) -> Result<CommandSubmission> {
+        let mut stream = TcpStream::connect(addr)
+            .with_context(|| format!("failed to connect command-gateway at {addr}"))?;
+        writeln!(stream, "{}", serde_json::to_string(envelope)?)?;
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .with_context(|| format!("failed to read command-gateway response from {addr}"))?;
+        let response = serde_json::from_str::<GatewayResponse>(line.trim())
+            .with_context(|| format!("failed to decode command-gateway response from {addr}"))?;
+        if response.status == "error" {
+            anyhow::bail!(
+                "command-gateway rejected request: {}",
+                response
+                    .error
+                    .unwrap_or_else(|| "unknown error".to_string())
+            );
+        }
+        Ok(CommandSubmission {
+            command_id: response.command_id,
+            status: response.status,
+            events: response.events,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GatewayResponse {
+    command_id: String,
+    status: String,
+    events: Vec<EventEnvelope>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 fn default_gateway_bin() -> PathBuf {

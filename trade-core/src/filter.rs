@@ -255,6 +255,7 @@ fn event_perm_id(event: &DomainEvent) -> Option<&str> {
 
 fn event_command_id(event: &DomainEvent) -> Option<&str> {
     match event {
+        DomainEvent::CommandAuthorityDecided(event) => Some(&event.command_id),
         DomainEvent::CommandAuditRecorded(event) => Some(&event.command_id),
         _ => None,
     }

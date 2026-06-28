@@ -45,8 +45,8 @@ trade-core/       event, command, reducer, and view-state types
 trade-tui/        Ratatui/Crossterm terminal cockpit
 tradectl/         non-interactive command-envelope emitter
 services/
-  state-projectiond/  JSONL-to-projection boundary service
-  command-gateway/    command validation/audit boundary service
+  state-projectiond/  projection snapshot/timeline query boundary service
+  command-gateway/    command validation/audit/dispatch boundary service
 contracts/proto/  language-neutral trading contracts
 fixtures/         sanitized projection/event fixtures for local cockpit checks
 .ai/              construction governance profiles and hooks
@@ -94,6 +94,10 @@ Shift-Tab   previous screen
 :           command palette input
 Up/Down     select account, order chain, or event row
 j/k         select account, order chain, or event row
+c           events page: copy correlation_id by OSC52
+o           events page: open selected event's order chain
+s           events page: open selected event's strategy
+y           events page: copy decoded event payload by OSC52
 K           risk page global kill-switch command
 A           risk page account kill-switch command
 F           risk page flatten selected account command
@@ -230,17 +234,42 @@ cargo run -p trade-tui -- \
   --mock \
   --otel-stdout \
   --otel-service-name trade-tui-local
+
+cargo run -p trade-tui -- \
+  --event-store-query-bin /path/to/event-store-query \
+  --event-store-uri postgres://redacted/event_store \
+  --correlation-id corr-demo-001
+
+COMMAND_GATEWAY_ADDR=127.0.0.1:39732 \
+cargo run -p trade-tui -- \
+  --command-gateway-addr 127.0.0.1:39732 \
+  --risk-check-bin /path/to/risk-check \
+  --strategy-control-bin /path/to/strategy-control \
+  --order-gateway-bin /path/to/order-gateway \
+  --alert-service-bin /path/to/alert-service
 ```
 
 `--audit-jsonl` appends the emitted command envelope to a local evidence file.
 `tradectl` does not execute the command; execution is always through
 `command-gateway`.
 
+`--event-store-query-bin` is an adapter boundary for Postgres/event-store replay.
+The adapter is invoked with `--query-events`, receives a JSON request on stdin,
+and must emit `EventEnvelope` JSONL on stdout. This keeps database/event-store
+client code out of the TUI.
+
 Projection and command boundary services:
 
 ```bash
 cargo run -p state-projectiond -- \
   --event-jsonl fixtures/order_lifecycle_events.jsonl
+
+cargo run -p state-projectiond -- \
+  --event-jsonl fixtures/order_lifecycle_events.jsonl \
+  --serve 127.0.0.1:39731
+
+printf '%s\n' '{"method":"GetOrderTimeline","correlation_id":"corr-fixture-001"}' \
+  | nc 127.0.0.1 39731
 
 cargo run -p tradectl -- \
   --operator-id operator-demo \
@@ -252,6 +281,16 @@ cargo run -p tradectl -- \
 cargo run -p command-gateway -- \
   --command-json /tmp/trade-command.json \
   --audit-jsonl /tmp/trade-command-audit.jsonl
+
+cargo run -p command-gateway -- \
+  --serve 127.0.0.1:39732 \
+  --audit-jsonl /tmp/trade-command-audit.jsonl \
+  --risk-check-bin /path/to/risk-check \
+  --strategy-control-bin /path/to/strategy-control \
+  --order-gateway-bin /path/to/order-gateway \
+  --alert-service-bin /path/to/alert-service
+
+cat /tmp/trade-command.json | nc 127.0.0.1 39732
 
 cargo run -p tradectl -- \
   evidence-bundle \
@@ -268,6 +307,18 @@ optional `--allow-capability` allowlisting. Dangerous envelopes are rejected by
 default unless the gateway is started with an explicit `--allow-dangerous` flag.
 The TUI Commands screen shows authority status, audit status, policy ids, reason
 codes, capability, and scope from those events.
+
+`command-gateway --serve` accepts one JSON `CommandEnvelope` per line over TCP
+and returns a JSON gateway response containing status plus emitted authority and
+audit events. `trade-tui --command-gateway-addr` uses that transport; without it,
+the TUI falls back to launching the local `command-gateway` binary and reading
+the emitted events from the configured audit file.
+
+The adapter flags are process boundaries, not linked dependencies. A risk
+adapter receives the command envelope on stdin with `--check-command-risk` and
+can return `accepted`, `rejected`, or another authority status with reason codes
+and policy ids. Strategy, order, and alert adapters receive the envelope with
+`--execute-command` and return a dispatch status/reason.
 
 With `--execute-broker-control`, the gateway can dispatch semantically exact
 runtime controls to an external `broker-control-gateway`:

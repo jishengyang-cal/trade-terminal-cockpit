@@ -1,11 +1,13 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use trade_core::events::{CommandAuditRecorded, CommandAuthorityDecided};
 use trade_core::{CommandEnvelope, CommandPayload, DangerLevel, DomainEvent, EventEnvelope};
 
@@ -13,11 +15,18 @@ use trade_core::{CommandEnvelope, CommandPayload, DangerLevel, DomainEvent, Even
 #[command(name = "command-gateway")]
 #[command(about = "Validate, audit, and optionally dispatch trading command envelopes")]
 struct Cli {
-    #[arg(long, value_name = "PATH")]
-    command_json: PathBuf,
+    #[arg(long, value_name = "PATH", required_unless_present = "serve")]
+    command_json: Option<PathBuf>,
 
-    #[arg(long, value_name = "PATH")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = ".run/command-gateway-audit.jsonl"
+    )]
     audit_jsonl: PathBuf,
+
+    #[arg(long, value_name = "ADDR")]
+    serve: Option<String>,
 
     #[arg(long)]
     allow_dangerous: bool,
@@ -36,12 +45,42 @@ struct Cli {
 
     #[arg(long = "broker-account-slot", value_name = "ACCOUNT_ID=SLOT")]
     broker_account_slots: Vec<String>,
+
+    #[arg(long, value_name = "PATH")]
+    risk_check_bin: Option<PathBuf>,
+
+    #[arg(long, value_name = "PATH")]
+    strategy_control_bin: Option<PathBuf>,
+
+    #[arg(long, value_name = "PATH")]
+    order_gateway_bin: Option<PathBuf>,
+
+    #[arg(long, value_name = "PATH")]
+    alert_service_bin: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let command = read_command(&cli.command_json)?;
+    if let Some(addr) = cli.serve.as_deref() {
+        return serve_gateway(addr, &cli);
+    }
+    let command_json = cli
+        .command_json
+        .as_ref()
+        .expect("clap requires --command-json unless --serve is set");
+    let command = read_command(command_json)?;
+    process_command(command, &cli)?;
+    Ok(())
+}
+
+fn process_command(command: CommandEnvelope, cli: &Cli) -> Result<GatewayResponse> {
+    validate_command(&command)?;
     let decision = decide(&command, cli.allow_dangerous, &cli.allow_capabilities)?;
+    let decision = if decision.status == "accepted" {
+        apply_external_risk_check(&command, decision, cli)?
+    } else {
+        decision
+    };
     let authority_event = EventEnvelope::new(
         format!("authority-{}", command.command_id),
         command.correlation_id.clone(),
@@ -63,8 +102,8 @@ fn main() -> Result<()> {
             target_environment: command.target_environment.clone(),
         }),
     );
-    let (status, reason) = if decision.status == "accepted" && cli.execute_broker_control {
-        dispatch_broker_control(&command, &cli)?
+    let (status, reason) = if decision.status == "accepted" {
+        dispatch_command(&command, cli, &decision.reason)?
     } else {
         (decision.status, decision.reason)
     };
@@ -74,23 +113,97 @@ fn main() -> Result<()> {
         0,
         "command-gateway",
         DomainEvent::CommandAuditRecorded(CommandAuditRecorded {
-            command_id: command.command_id,
-            operator_id: command.operator_id,
-            command_type: command.command_type,
+            command_id: command.command_id.clone(),
+            operator_id: command.operator_id.clone(),
+            command_type: command.command_type.clone(),
             status,
             reason,
-            target: Some(command.aggregate_id),
+            target: Some(command.aggregate_id.clone()),
         }),
     );
 
+    append_audit_events(cli, [&authority_event, &audit_event])?;
+    Ok(GatewayResponse {
+        command_id: command.command_id.clone(),
+        status: command_event_status(&audit_event),
+        events: vec![authority_event, audit_event],
+        error: None,
+    })
+}
+
+fn append_audit_events<'a>(
+    cli: &Cli,
+    events: impl IntoIterator<Item = &'a EventEnvelope>,
+) -> Result<()> {
+    if let Some(parent) = cli
+        .audit_jsonl
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&cli.audit_jsonl)
         .with_context(|| format!("failed to open {}", cli.audit_jsonl.display()))?;
-    writeln!(file, "{}", serde_json::to_string(&authority_event)?)?;
-    writeln!(file, "{}", serde_json::to_string(&audit_event)?)?;
+    for event in events {
+        writeln!(file, "{}", serde_json::to_string(event)?)?;
+    }
     Ok(())
+}
+
+fn serve_gateway(addr: &str, cli: &Cli) -> Result<()> {
+    let listener = TcpListener::bind(addr)
+        .with_context(|| format!("failed to bind command-gateway on {addr}"))?;
+    eprintln!("command-gateway listening on {addr}");
+    for stream in listener.incoming() {
+        let stream = stream.context("failed to accept command-gateway client")?;
+        handle_gateway_client(stream, cli)?;
+    }
+    Ok(())
+}
+
+fn handle_gateway_client(mut stream: TcpStream, cli: &Cli) -> Result<()> {
+    let peer = stream.peer_addr().ok();
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut line = String::new();
+    while reader.read_line(&mut line)? != 0 {
+        let response = match serde_json::from_str::<CommandEnvelope>(line.trim()) {
+            Ok(command) => match process_command(command, cli) {
+                Ok(response) => response,
+                Err(error) => GatewayResponse::error(error.to_string()),
+            },
+            Err(error) => GatewayResponse::error(format!("invalid command envelope: {error}")),
+        };
+        writeln!(stream, "{}", serde_json::to_string(&response)?)?;
+        line.clear();
+    }
+    if let Some(peer) = peer {
+        eprintln!("command-gateway client disconnected: {peer}");
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GatewayResponse {
+    command_id: String,
+    status: String,
+    events: Vec<EventEnvelope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+impl GatewayResponse {
+    fn error(error: String) -> Self {
+        Self {
+            command_id: String::new(),
+            status: "error".to_string(),
+            events: Vec::new(),
+            error: Some(error),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -113,6 +226,159 @@ struct BrokerControlRequest {
 enum BrokerControlScope {
     Global,
     AccountSlot(u8),
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ExternalAdapterResponse {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    reason_codes: Vec<String>,
+    #[serde(default)]
+    matched_policy_ids: Vec<String>,
+    #[serde(default)]
+    approved_by: Vec<String>,
+}
+
+fn dispatch_command(
+    command: &CommandEnvelope,
+    cli: &Cli,
+    accepted_reason: &str,
+) -> Result<(String, String)> {
+    if let Some(path) = adapter_for_command(command, cli) {
+        return run_external_dispatch_adapter(path, command);
+    }
+    if cli.execute_broker_control {
+        return dispatch_broker_control(command, cli);
+    }
+    Ok(("accepted".to_string(), accepted_reason.to_string()))
+}
+
+fn adapter_for_command<'a>(command: &CommandEnvelope, cli: &'a Cli) -> Option<&'a PathBuf> {
+    match &command.payload {
+        CommandPayload::PauseStrategyRequested { .. }
+        | CommandPayload::ResumeStrategyRequested { .. }
+        | CommandPayload::DrainStrategyRequested { .. }
+        | CommandPayload::KillStrategyRequested { .. } => cli.strategy_control_bin.as_ref(),
+        CommandPayload::CancelOrderRequested { .. }
+        | CommandPayload::CancelAllOrdersForSymbolRequested { .. }
+        | CommandPayload::CancelAllOrdersForAccountRequested { .. } => {
+            cli.order_gateway_bin.as_ref()
+        }
+        CommandPayload::AcknowledgeAlertRequested { .. } => cli.alert_service_bin.as_ref(),
+        _ => None,
+    }
+}
+
+fn apply_external_risk_check(
+    command: &CommandEnvelope,
+    decision: AuthorityDecision,
+    cli: &Cli,
+) -> Result<AuthorityDecision> {
+    let Some(path) = cli.risk_check_bin.as_ref() else {
+        return Ok(decision);
+    };
+    let output = run_json_adapter(path, command, &["--check-command-risk"])?;
+    let Some(response) = output else {
+        return Ok(decision);
+    };
+    let status = response.status.unwrap_or_else(|| "accepted".to_string());
+    if status == "accepted" {
+        let mut merged = decision;
+        if let Some(reason) = response.reason {
+            merged.reason = reason;
+        }
+        merged.reason_codes.extend(response.reason_codes);
+        merged
+            .matched_policy_ids
+            .extend(response.matched_policy_ids);
+        merged.approved_by.extend(response.approved_by);
+        return Ok(merged);
+    }
+
+    Ok(AuthorityDecision {
+        status,
+        reason: response
+            .reason
+            .unwrap_or_else(|| "external risk check rejected command".to_string()),
+        reason_codes: if response.reason_codes.is_empty() {
+            vec!["external_risk_rejected".to_string()]
+        } else {
+            response.reason_codes
+        },
+        matched_policy_ids: if response.matched_policy_ids.is_empty() {
+            vec!["external.risk".to_string()]
+        } else {
+            response.matched_policy_ids
+        },
+        approved_by: response.approved_by,
+    })
+}
+
+fn run_external_dispatch_adapter(
+    path: &PathBuf,
+    command: &CommandEnvelope,
+) -> Result<(String, String)> {
+    let output = run_json_adapter(path, command, &["--execute-command"])?;
+    let Some(response) = output else {
+        return Ok((
+            "dispatched".to_string(),
+            format!("external adapter dispatched {}", command.command_type),
+        ));
+    };
+    Ok((
+        response.status.unwrap_or_else(|| "dispatched".to_string()),
+        response
+            .reason
+            .unwrap_or_else(|| format!("external adapter dispatched {}", command.command_type)),
+    ))
+}
+
+fn run_json_adapter(
+    path: &PathBuf,
+    command: &CommandEnvelope,
+    args: &[&str],
+) -> Result<Option<ExternalAdapterResponse>> {
+    let mut process = Command::new(path)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to launch external adapter {}", path.display()))?;
+    {
+        let stdin = process
+            .stdin
+            .as_mut()
+            .context("external adapter stdin unavailable")?;
+        writeln!(stdin, "{}", serde_json::to_string(command)?)?;
+    }
+    let output = process.wait_with_output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "external adapter {} failed: exit={} stderr={}",
+            path.display(),
+            output
+                .status
+                .code()
+                .map_or_else(|| "signal".to_string(), |code| code.to_string()),
+            compact_process_text(&output.stderr)
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = stdout.trim();
+    if stdout.is_empty() {
+        return Ok(None);
+    }
+    let response = serde_json::from_str::<ExternalAdapterResponse>(stdout).with_context(|| {
+        format!(
+            "external adapter {} returned invalid JSON response",
+            path.display()
+        )
+    })?;
+    Ok(Some(response))
 }
 
 fn dispatch_broker_control(command: &CommandEnvelope, cli: &Cli) -> Result<(String, String)> {
@@ -405,6 +671,11 @@ fn read_command(path: &PathBuf) -> Result<CommandEnvelope> {
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let command = serde_json::from_str::<CommandEnvelope>(&content)
         .with_context(|| format!("failed to decode {}", path.display()))?;
+    validate_command(&command)?;
+    Ok(command)
+}
+
+fn validate_command(command: &CommandEnvelope) -> Result<()> {
     if command.operator_id.trim().is_empty()
         || command.session_id.trim().is_empty()
         || command.reason.trim().is_empty()
@@ -413,7 +684,15 @@ fn read_command(path: &PathBuf) -> Result<CommandEnvelope> {
     {
         bail!("command envelope missing operator/session/reason/capability/correlation fields");
     }
-    Ok(command)
+    Ok(())
+}
+
+fn command_event_status(event: &EventEnvelope) -> String {
+    match &event.payload {
+        DomainEvent::CommandAuditRecorded(event) => event.status.clone(),
+        DomainEvent::CommandAuthorityDecided(event) => event.status.clone(),
+        _ => "unknown".to_string(),
+    }
 }
 
 fn decide(

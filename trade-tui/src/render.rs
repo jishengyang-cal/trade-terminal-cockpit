@@ -4,6 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
+use std::path::PathBuf;
 use trade_core::state::{AccountView, AppState, EventSummary, OrderChain, StrategyView};
 
 pub fn plain_summary(state: &AppState, replay: bool, filter_summary: Option<&str>) -> String {
@@ -259,6 +260,9 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         String::new(),
         "Order actions".to_string(),
         "x cancel selected order    X cancel all for selected symbol".to_string(),
+        String::new(),
+        "Events actions".to_string(),
+        "c copy corr_id   o open order chain   s open strategy   y copy payload".to_string(),
         String::new(),
         "Risk actions".to_string(),
         "K global kill switch       A account kill switch       F flatten selected account"
@@ -652,6 +656,14 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .to_string(),
         ),
         kv_wide(
+            "gateway_addr",
+            app.command_client
+                .config()
+                .gateway_addr
+                .as_deref()
+                .unwrap_or("-"),
+        ),
+        kv_wide(
             "audit_jsonl",
             &app.command_client
                 .config()
@@ -671,6 +683,18 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .config()
                 .execute_broker_control
                 .to_string(),
+        ),
+        kv_wide(
+            "risk_adapter",
+            &format_optional_path(app.command_client.config().risk_check_bin.as_ref()),
+        ),
+        kv_wide(
+            "strategy_adapter",
+            &format_optional_path(app.command_client.config().strategy_control_bin.as_ref()),
+        ),
+        kv_wide(
+            "order_adapter",
+            &format_optional_path(app.command_client.config().order_gateway_bin.as_ref()),
         ),
         kv_wide(
             "last_status",
@@ -797,7 +821,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
             " COMMANDS: / search | x cancel order | X cancel all symbol | Up/Down select | q exits ".to_string()
         }
         Screen::Events => {
-            " READ ONLY: / search | up/down or j/k select | q exits ".to_string()
+            " READ ONLY: / search | c copy corr | o order chain | s strategy | y copy payload | q exits ".to_string()
         }
         _ if app.replay => " REPLAY: no live commands | q exits ".to_string(),
         _ => {
@@ -1182,5 +1206,11 @@ fn format_optional_price(price: Option<&trade_core::Price>) -> String {
 fn format_optional_u64(value: Option<u64>) -> String {
     value
         .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_path(value: Option<&PathBuf>) -> String {
+    value
+        .map(|path| path.display().to_string())
         .unwrap_or_else(|| "-".to_string())
 }

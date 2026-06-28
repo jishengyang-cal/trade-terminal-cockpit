@@ -24,7 +24,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 
     if app.command_palette_active {
         match key.code {
-            KeyCode::Esc | KeyCode::Enter => app.close_command_palette(),
+            KeyCode::Esc => app.close_command_palette(),
+            KeyCode::Enter => app.submit_command_palette(),
             KeyCode::Backspace => app.pop_command_palette_char(),
             KeyCode::Char(ch) => app.push_command_palette_char(ch),
             _ => {}
@@ -61,6 +62,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('X') if app.screen == Screen::Orders => {
             app.open_cancel_all_for_symbol_modal()
         }
+        KeyCode::Char('c') if app.screen == Screen::Events => app.copy_selected_event_correlation(),
+        KeyCode::Char('o') if app.screen == Screen::Events => app.open_selected_event_order_chain(),
+        KeyCode::Char('s') if app.screen == Screen::Events => app.open_selected_event_strategy(),
+        KeyCode::Char('y') if app.screen == Screen::Events => app.copy_selected_event_payload(),
         KeyCode::Down | KeyCode::Char('j') => app.select_next(),
         KeyCode::Up | KeyCode::Char('k') => app.select_previous(),
         KeyCode::F(key) => {

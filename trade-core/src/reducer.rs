@@ -1034,6 +1034,7 @@ fn summarize(envelope: &EventEnvelope) -> EventSummary {
         correlation_id: envelope.correlation_id.clone(),
         producer: envelope.producer.clone(),
         headline: headline(&envelope.payload),
+        payload_json: serde_json::to_string(&envelope.payload).ok(),
     }
 }
 

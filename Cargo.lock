@@ -249,6 +249,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde",
  "serde_json",
  "trade-core",
 ]
@@ -1745,6 +1746,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde",
  "serde_json",
  "trade-core",
 ]
@@ -2075,6 +2077,7 @@ dependencies = [
  "opentelemetry-stdout",
  "opentelemetry_sdk",
  "ratatui",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

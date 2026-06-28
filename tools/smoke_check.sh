@@ -4,6 +4,25 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+wait_for_tcp_fd() {
+  local fd="$1"
+  local host="$2"
+  local port="$3"
+  local label="$4"
+  local log_file="${5:-}"
+  for _ in $(seq 1 600); do
+    if eval "exec ${fd}<>/dev/tcp/${host}/${port}" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "${label} did not open ${host}:${port}" >&2
+  if [[ -n "$log_file" && -f "$log_file" ]]; then
+    cat "$log_file" >&2
+  fi
+  return 1
+}
+
 cargo check --workspace
 cargo test --workspace
 cargo run -p trade-tui -- --plain | grep -q 'mode=COCKPIT'
@@ -27,6 +46,13 @@ cargo run -p trade-tui -- --help | grep -q -- '--nats-url'
 cargo run -p trade-tui -- --help | grep -q -- '--nats-subject'
 cargo run -p trade-tui -- --help | grep -q -- '--jetstream-durable'
 cargo run -p trade-tui -- --help | grep -q -- '--otel-stdout'
+cargo run -p trade-tui -- --help | grep -q -- '--event-store-query-bin'
+cargo run -p trade-tui -- --help | grep -q -- '--command-gateway-addr'
+cargo run -p trade-tui -- --help | grep -q -- '--risk-check-bin'
+cargo run -p trade-tui -- --help | grep -q -- '--strategy-control-bin'
+cargo run -p command-gateway -- --help | grep -q -- '--serve'
+cargo run -p command-gateway -- --help | grep -q -- '--risk-check-bin'
+cargo run -p state-projectiond -- --help | grep -q -- '--serve'
 rm -f /tmp/trade-terminal-cockpit-otel.out
 cargo run -p trade-tui -- \
   --plain \
@@ -38,6 +64,43 @@ grep -q 'tui_events_ingested_total' /tmp/trade-terminal-cockpit-otel.out
 cargo run -p state-projectiond -- \
   --event-jsonl fixtures/order_lifecycle_events.jsonl |
   grep -q '"source": "state-projectiond-jsonl"'
+
+rm -f /tmp/trade-terminal-cockpit-projectiond.out /tmp/trade-terminal-cockpit-projectiond.response
+cargo run -p state-projectiond -- \
+  --event-jsonl fixtures/order_lifecycle_events.jsonl \
+  --serve 127.0.0.1:39731 >/tmp/trade-terminal-cockpit-projectiond.out 2>&1 &
+PROJECTIOND_PID=$!
+cleanup_projectiond() {
+  kill "$PROJECTIOND_PID" >/dev/null 2>&1 || true
+}
+trap cleanup_projectiond EXIT
+wait_for_tcp_fd 3 127.0.0.1 39731 state-projectiond /tmp/trade-terminal-cockpit-projectiond.out
+printf '%s\n' '{"method":"GetOrderTimeline","correlation_id":"corr-fixture-001"}' >&3
+IFS= read -r PROJECTIOND_RESPONSE <&3
+printf '%s\n' "$PROJECTIOND_RESPONSE" >/tmp/trade-terminal-cockpit-projectiond.response
+exec 3<&-
+exec 3>&-
+grep -q '"status":"ok"' /tmp/trade-terminal-cockpit-projectiond.response
+grep -q '"timeline"' /tmp/trade-terminal-cockpit-projectiond.response
+cleanup_projectiond
+trap - EXIT
+
+cat >/tmp/trade-terminal-cockpit-fake-event-store <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--query-events" ]]
+cat >/tmp/trade-terminal-cockpit-fake-event-store.request
+cat fixtures/order_lifecycle_events.jsonl
+EOF
+chmod +x /tmp/trade-terminal-cockpit-fake-event-store
+cargo run -p trade-tui -- \
+  --plain \
+  --event-store-query-bin /tmp/trade-terminal-cockpit-fake-event-store \
+  --event-store-uri postgres://redacted/event_store \
+  --correlation-id corr-fixture-001 |
+  grep -q 'orders=1 positions=1 open_alerts=1 last_seq=12'
+grep -q '"correlation_id":"corr-fixture-001"' /tmp/trade-terminal-cockpit-fake-event-store.request
+
 cargo run -p tradectl -- \
   --operator-id smoke-operator \
   --session-id smoke-session \
@@ -76,6 +139,59 @@ cargo run -p command-gateway -- \
   --command-json /tmp/trade-terminal-cockpit-command.json \
   --audit-jsonl /tmp/trade-terminal-cockpit-gateway-audit.jsonl
 grep -q '"status":"accepted"' /tmp/trade-terminal-cockpit-gateway-audit.jsonl
+
+rm -f /tmp/trade-terminal-cockpit-gateway-serve-audit.jsonl /tmp/trade-terminal-cockpit-gateway-serve.out /tmp/trade-terminal-cockpit-gateway-serve.response
+cargo run -p command-gateway -- \
+  --serve 127.0.0.1:39732 \
+  --audit-jsonl /tmp/trade-terminal-cockpit-gateway-serve-audit.jsonl >/tmp/trade-terminal-cockpit-gateway-serve.out 2>&1 &
+GATEWAY_PID=$!
+cleanup_gateway() {
+  kill "$GATEWAY_PID" >/dev/null 2>&1 || true
+}
+trap cleanup_gateway EXIT
+wait_for_tcp_fd 4 127.0.0.1 39732 command-gateway /tmp/trade-terminal-cockpit-gateway-serve.out
+cat /tmp/trade-terminal-cockpit-command.json >&4
+IFS= read -r GATEWAY_RESPONSE <&4
+printf '%s\n' "$GATEWAY_RESPONSE" >/tmp/trade-terminal-cockpit-gateway-serve.response
+exec 4<&-
+exec 4>&-
+grep -q '"status":"accepted"' /tmp/trade-terminal-cockpit-gateway-serve.response
+grep -q '"CommandAuthorityDecided"' /tmp/trade-terminal-cockpit-gateway-serve.response
+grep -q '"CommandAuditRecorded"' /tmp/trade-terminal-cockpit-gateway-serve-audit.jsonl
+cleanup_gateway
+trap - EXIT
+
+cat >/tmp/trade-terminal-cockpit-fake-risk-check <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--check-command-risk" ]]
+cat >/tmp/trade-terminal-cockpit-fake-risk-check.command
+printf '%s\n' '{"status":"rejected","reason":"risk adapter blocked command","reason_codes":["risk_adapter_block"],"matched_policy_ids":["external.risk.test"]}'
+EOF
+chmod +x /tmp/trade-terminal-cockpit-fake-risk-check
+rm -f /tmp/trade-terminal-cockpit-risk-adapter-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-risk-adapter-audit.jsonl \
+  --risk-check-bin /tmp/trade-terminal-cockpit-fake-risk-check
+grep -q '"status":"rejected"' /tmp/trade-terminal-cockpit-risk-adapter-audit.jsonl
+grep -q 'risk_adapter_block' /tmp/trade-terminal-cockpit-risk-adapter-audit.jsonl
+
+cat >/tmp/trade-terminal-cockpit-fake-strategy-control <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--execute-command" ]]
+cat >/tmp/trade-terminal-cockpit-fake-strategy-control.command
+printf '%s\n' '{"status":"dispatched","reason":"strategy adapter dispatched"}'
+EOF
+chmod +x /tmp/trade-terminal-cockpit-fake-strategy-control
+rm -f /tmp/trade-terminal-cockpit-strategy-adapter-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-strategy-adapter-audit.jsonl \
+  --strategy-control-bin /tmp/trade-terminal-cockpit-fake-strategy-control
+grep -q '"status":"dispatched"' /tmp/trade-terminal-cockpit-strategy-adapter-audit.jsonl
+grep -q 'strategy adapter dispatched' /tmp/trade-terminal-cockpit-strategy-adapter-audit.jsonl
 
 cargo run -p tradectl -- \
   --operator-id smoke-operator \

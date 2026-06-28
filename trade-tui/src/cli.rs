@@ -13,6 +13,12 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub event_jsonl: Option<PathBuf>,
 
+    #[arg(long, value_name = "PATH")]
+    pub event_store_query_bin: Option<PathBuf>,
+
+    #[arg(long, value_name = "URI")]
+    pub event_store_uri: Option<String>,
+
     #[arg(long)]
     pub mock: bool,
 
@@ -88,6 +94,9 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub command_gateway_bin: Option<PathBuf>,
 
+    #[arg(long, value_name = "ADDR")]
+    pub command_gateway_addr: Option<String>,
+
     #[arg(
         long,
         value_name = "PATH",
@@ -109,6 +118,18 @@ pub struct Cli {
 
     #[arg(long = "broker-account-slot", value_name = "ACCOUNT_ID=SLOT")]
     pub broker_account_slots: Vec<String>,
+
+    #[arg(long, value_name = "PATH")]
+    pub risk_check_bin: Option<PathBuf>,
+
+    #[arg(long, value_name = "PATH")]
+    pub strategy_control_bin: Option<PathBuf>,
+
+    #[arg(long, value_name = "PATH")]
+    pub order_gateway_bin: Option<PathBuf>,
+
+    #[arg(long, value_name = "PATH")]
+    pub alert_service_bin: Option<PathBuf>,
 
     #[arg(long, default_value = "paper")]
     pub target_environment: String,

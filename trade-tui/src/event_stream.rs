@@ -2,7 +2,8 @@ use crate::cli::Cli;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -10,7 +11,9 @@ use trade_core::events::IngestDiagnosticRecorded;
 use trade_core::{DomainEvent, EventEnvelope, EventFilter};
 
 pub fn load_events(cli: &Cli, filter: &EventFilter) -> Result<Vec<EventEnvelope>> {
-    let events = if cli.mock || (cli.event_jsonl.is_none() && cli.snapshot_json.is_none()) {
+    let events = if cli.event_store_query_bin.is_some() {
+        load_events_from_event_store(cli, filter)?
+    } else if cli.mock || (cli.event_jsonl.is_none() && cli.snapshot_json.is_none()) {
         trade_core::sample::sample_events()
     } else if cli.event_jsonl.is_none() {
         Vec::new()
@@ -40,6 +43,70 @@ pub fn load_events(cli: &Cli, filter: &EventFilter) -> Result<Vec<EventEnvelope>
         .into_iter()
         .filter(|event| filter.matches(event))
         .collect())
+}
+
+fn load_events_from_event_store(cli: &Cli, filter: &EventFilter) -> Result<Vec<EventEnvelope>> {
+    let bin = cli
+        .event_store_query_bin
+        .as_ref()
+        .expect("checked by caller");
+    let mut process = Command::new(bin)
+        .arg("--query-events")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to launch event-store adapter {}", bin.display()))?;
+    {
+        let stdin = process
+            .stdin
+            .as_mut()
+            .context("event-store adapter stdin unavailable")?;
+        let request = serde_json::json!({
+            "event_store_uri": cli.event_store_uri,
+            "filter": filter,
+        });
+        writeln!(stdin, "{}", serde_json::to_string(&request)?)?;
+    }
+    let output = process.wait_with_output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "event-store adapter exited with {}: {}",
+            output
+                .status
+                .code()
+                .map_or_else(|| "signal".to_string(), |code| code.to_string()),
+            compact_process_text(&output.stderr)
+        );
+    }
+    decode_event_jsonl_bytes(&output.stdout, "event-store adapter stdout")
+}
+
+fn decode_event_jsonl_bytes(bytes: &[u8], source: &str) -> Result<Vec<EventEnvelope>> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut events = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let event = serde_json::from_str::<EventEnvelope>(line)
+            .with_context(|| format!("failed to decode {source} line {}", index + 1))?;
+        events.push(event);
+    }
+    Ok(events)
+}
+
+fn compact_process_text(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        "<empty>".to_string()
+    } else if compact.chars().count() > 240 {
+        format!("{}...", compact.chars().take(240).collect::<String>())
+    } else {
+        compact
+    }
 }
 
 pub fn spawn_event_sources(

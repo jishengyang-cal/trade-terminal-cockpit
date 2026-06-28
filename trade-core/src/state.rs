@@ -1198,4 +1198,6 @@ pub struct EventSummary {
     pub correlation_id: String,
     pub producer: String,
     pub headline: String,
+    #[serde(default)]
+    pub payload_json: Option<String>,
 }

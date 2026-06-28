@@ -10,6 +10,7 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
+use std::io::Write;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 use trade_core::state::{EventSummary, OrderChain, StrategyView};
@@ -221,6 +222,23 @@ impl App {
         self.command_palette_active = false;
     }
 
+    pub fn submit_command_palette(&mut self) {
+        let input = self.command_palette_input.trim().to_string();
+        if input.is_empty() {
+            self.close_command_palette();
+            return;
+        }
+        match self.parse_command_palette(&input) {
+            Ok(action) => {
+                self.command_palette_active = false;
+                self.open_command_modal(action);
+            }
+            Err(message) => {
+                self.last_command_message = Some(message);
+            }
+        }
+    }
+
     pub fn push_command_palette_char(&mut self, ch: char) {
         if !ch.is_control() {
             self.command_palette_input.push(ch);
@@ -229,6 +247,155 @@ impl App {
 
     pub fn pop_command_palette_char(&mut self) {
         self.command_palette_input.pop();
+    }
+
+    fn parse_command_palette(
+        &self,
+        input: &str,
+    ) -> std::result::Result<PendingCommandAction, String> {
+        let parts = input.split_whitespace().collect::<Vec<_>>();
+        let Some(command) = parts.first().copied() else {
+            return Err("empty command".to_string());
+        };
+        let reason = self.command_client.config().reason.clone();
+        match command {
+            "pause" | "pause-strategy" if parts.len() == 2 => Ok(strategy_action(
+                "PAUSE STRATEGY",
+                parts[1],
+                format!("PAUSE {}", parts[1]),
+                format!("tradectl pause-strategy {}", parts[1]),
+                CommandPayload::PauseStrategyRequested {
+                    strategy_id: parts[1].to_string(),
+                },
+                reason,
+            )),
+            "resume" | "resume-strategy" if parts.len() == 2 => Ok(strategy_action(
+                "RESUME STRATEGY",
+                parts[1],
+                format!("RESUME {}", parts[1]),
+                format!("tradectl resume-strategy {}", parts[1]),
+                CommandPayload::ResumeStrategyRequested {
+                    strategy_id: parts[1].to_string(),
+                },
+                reason,
+            )),
+            "drain" | "drain-strategy" if parts.len() == 2 => Ok(strategy_action(
+                "DRAIN STRATEGY",
+                parts[1],
+                format!("DRAIN {}", parts[1]),
+                format!("tradectl drain-strategy {}", parts[1]),
+                CommandPayload::DrainStrategyRequested {
+                    strategy_id: parts[1].to_string(),
+                },
+                reason,
+            )),
+            "kill-strategy" if parts.len() == 2 => Ok(strategy_action(
+                "KILL STRATEGY",
+                parts[1],
+                format!("KILL STRATEGY {}", parts[1]),
+                format!(
+                    "tradectl kill-strategy {} --confirm 'KILL STRATEGY {}'",
+                    parts[1], parts[1]
+                ),
+                CommandPayload::KillStrategyRequested {
+                    strategy_id: parts[1].to_string(),
+                },
+                reason,
+            )),
+            "cancel-order" if parts.len() == 3 => Ok(PendingCommandAction {
+                action: "CANCEL ORDER".to_string(),
+                target: format!("{}:{}", parts[1], parts[2]),
+                effects: vec!["send CancelOrderRequested to command-gateway".to_string()],
+                expected_confirmation: format!("CANCEL {} {}", parts[1], parts[2]),
+                tradectl_replay: format!("tradectl cancel-order {} {}", parts[1], parts[2]),
+                payload: CommandPayload::CancelOrderRequested {
+                    account_id: parts[1].to_string(),
+                    order_id: parts[2].to_string(),
+                },
+                capability: "order.cancel".to_string(),
+                reason,
+            }),
+            "cancel-all" | "cancel-all-orders-for-symbol" if parts.len() == 3 => {
+                Ok(PendingCommandAction {
+                    action: "CANCEL ALL FOR SYMBOL".to_string(),
+                    target: format!("{}:{}", parts[1], parts[2]),
+                    effects: vec![
+                        "send CancelAllOrdersForSymbolRequested to command-gateway".to_string()
+                    ],
+                    expected_confirmation: format!("CANCEL ALL {} {}", parts[1], parts[2]),
+                    tradectl_replay: format!(
+                        "tradectl cancel-all-orders-for-symbol {} {} --confirm 'CANCEL ALL {} {}'",
+                        parts[1], parts[2], parts[1], parts[2]
+                    ),
+                    payload: CommandPayload::CancelAllOrdersForSymbolRequested {
+                        account_id: parts[1].to_string(),
+                        symbol: parts[2].to_string(),
+                    },
+                    capability: "order.cancel".to_string(),
+                    reason,
+                })
+            }
+            "flatten-account" if parts.len() == 2 => Ok(PendingCommandAction {
+                action: "FLATTEN ACCOUNT".to_string(),
+                target: parts[1].to_string(),
+                effects: vec!["send FlattenAccountRequested to command-gateway".to_string()],
+                expected_confirmation: format!("FLATTEN ACCOUNT {}", parts[1]),
+                tradectl_replay: format!(
+                    "tradectl flatten-account {} --confirm 'FLATTEN ACCOUNT {}'",
+                    parts[1], parts[1]
+                ),
+                payload: CommandPayload::FlattenAccountRequested {
+                    account_id: parts[1].to_string(),
+                },
+                capability: "account.flatten".to_string(),
+                reason,
+            }),
+            "account-kill" | "account-kill-switch" if parts.len() == 2 => {
+                Ok(PendingCommandAction {
+                    action: "ACCOUNT KILL SWITCH".to_string(),
+                    target: parts[1].to_string(),
+                    effects: vec!["send AccountKillSwitchRequested to command-gateway".to_string()],
+                    expected_confirmation: format!("KILL ACCOUNT {}", parts[1]),
+                    tradectl_replay: format!(
+                        "tradectl account-kill-switch {} --confirm 'KILL ACCOUNT {}'",
+                        parts[1], parts[1]
+                    ),
+                    payload: CommandPayload::AccountKillSwitchRequested {
+                        account_id: parts[1].to_string(),
+                    },
+                    capability: "account.kill".to_string(),
+                    reason,
+                })
+            }
+            "global-kill" | "global-kill-switch" if parts.len() == 2 => Ok(PendingCommandAction {
+                action: "GLOBAL KILL SWITCH".to_string(),
+                target: parts[1].to_string(),
+                effects: vec!["send GlobalKillSwitchRequested to command-gateway".to_string()],
+                expected_confirmation: format!("KILL {}", parts[1]),
+                tradectl_replay: format!(
+                    "tradectl global-kill-switch {} --confirm 'KILL {}'",
+                    parts[1], parts[1]
+                ),
+                payload: CommandPayload::GlobalKillSwitchRequested {
+                    account_id: parts[1].to_string(),
+                },
+                capability: "account.kill".to_string(),
+                reason,
+            }),
+            "ack-alert" if parts.len() == 2 => Ok(PendingCommandAction {
+                action: "ACK ALERT".to_string(),
+                target: parts[1].to_string(),
+                effects: vec!["send AcknowledgeAlertRequested to command-gateway".to_string()],
+                expected_confirmation: format!("ACK {}", parts[1]),
+                tradectl_replay: format!("tradectl ack-alert {}", parts[1]),
+                payload: CommandPayload::AcknowledgeAlertRequested {
+                    alert_id: parts[1].to_string(),
+                },
+                capability: "alert.ack".to_string(),
+                reason,
+            }),
+            _ => Err(format!("unknown command palette input: {input}")),
+        }
     }
 
     pub fn open_global_kill_modal(&mut self) {
@@ -496,6 +663,67 @@ impl App {
         }
     }
 
+    pub fn copy_selected_event_correlation(&mut self) {
+        let Some(event) = self.selected_event_summary() else {
+            self.last_command_message = Some("no selected event".to_string());
+            return;
+        };
+        let value = event.correlation_id.clone();
+        self.copy_text("correlation_id", &value);
+    }
+
+    pub fn copy_selected_event_payload(&mut self) {
+        let Some(event) = self.selected_event_summary() else {
+            self.last_command_message = Some("no selected event".to_string());
+            return;
+        };
+        let value = event
+            .payload_json
+            .clone()
+            .unwrap_or_else(|| event.headline.clone());
+        self.copy_text("payload", &value);
+    }
+
+    pub fn open_selected_event_order_chain(&mut self) {
+        let Some(event) = self.selected_event_summary() else {
+            self.last_command_message = Some("no selected event".to_string());
+            return;
+        };
+        self.search_query = event.correlation_id.clone();
+        self.selected_order_index = 0;
+        self.screen = Screen::Orders;
+    }
+
+    pub fn open_selected_event_strategy(&mut self) {
+        let Some(event) = self.selected_event_summary() else {
+            self.last_command_message = Some("no selected event".to_string());
+            return;
+        };
+        self.search_query = if event.aggregate_type == "strategy" {
+            event.aggregate_id.clone()
+        } else {
+            event
+                .headline
+                .split_whitespace()
+                .next()
+                .unwrap_or(event.aggregate_id.as_str())
+                .to_string()
+        };
+        self.selected_strategy_index = 0;
+        self.screen = Screen::Strategies;
+    }
+
+    fn copy_text(&mut self, label: &str, value: &str) {
+        match write_osc52_clipboard(value) {
+            Ok(()) => {
+                self.last_command_message = Some(format!("copied {label} to terminal clipboard"));
+            }
+            Err(error) => {
+                self.last_command_message = Some(format!("failed to copy {label}: {error}"));
+            }
+        }
+    }
+
     fn reset_selection(&mut self) {
         self.selected_account_index = 0;
         self.selected_strategy_index = 0;
@@ -570,6 +798,18 @@ impl App {
         let chain = self.selected_order_chain()?;
         Some((chain.account_id.clone()?, chain.symbol.clone()?))
     }
+
+    fn selected_event_summary(&self) -> Option<EventSummary> {
+        self.state
+            .audit
+            .events
+            .iter()
+            .rev()
+            .take(200)
+            .filter(|event| event_matches_search(event, &self.search_query))
+            .nth(self.selected_event_index)
+            .cloned()
+    }
 }
 
 fn next_index(current: usize, len: usize) -> usize {
@@ -590,6 +830,59 @@ pub struct PendingCommandAction {
     pub payload: CommandPayload,
     pub capability: String,
     pub reason: String,
+}
+
+fn strategy_action(
+    action: &str,
+    strategy_id: &str,
+    expected_confirmation: String,
+    tradectl_replay: String,
+    payload: CommandPayload,
+    reason: String,
+) -> PendingCommandAction {
+    PendingCommandAction {
+        action: action.to_string(),
+        target: strategy_id.to_string(),
+        effects: vec![format!(
+            "send {} to command-gateway",
+            payload.command_type()
+        )],
+        expected_confirmation,
+        tradectl_replay,
+        payload,
+        capability: "strategy.control".to_string(),
+        reason,
+    }
+}
+
+fn write_osc52_clipboard(value: &str) -> io::Result<()> {
+    let encoded = base64_encode(value.as_bytes());
+    let mut stdout = io::stdout();
+    write!(stdout, "\x1b]52;c;{encoded}\x07")?;
+    stdout.flush()
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::new();
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        output.push(TABLE[(b0 >> 2) as usize] as char);
+        output.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
 }
 
 fn strategy_matches_search(strategy: &StrategyView, query: &str) -> bool {
