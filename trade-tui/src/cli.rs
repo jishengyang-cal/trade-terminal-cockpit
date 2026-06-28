@@ -25,6 +25,18 @@ pub struct Cli {
     #[arg(long, default_value_t = 250)]
     pub follow_poll_ms: u64,
 
+    #[arg(long, value_name = "URL")]
+    pub nats_url: Option<String>,
+
+    #[arg(long = "nats-subject", value_name = "SUBJECT", requires = "nats_url")]
+    pub nats_subjects: Vec<String>,
+
+    #[arg(long, value_name = "STREAM", requires = "nats_url")]
+    pub jetstream_stream: Option<String>,
+
+    #[arg(long, value_name = "DURABLE", requires = "nats_url")]
+    pub jetstream_durable: Option<String>,
+
     #[arg(long)]
     pub replay: bool,
 
@@ -57,6 +69,12 @@ pub struct Cli {
 
     #[arg(long, default_value_t = 20)]
     pub fps: u16,
+
+    #[arg(long)]
+    pub otel_stdout: bool,
+
+    #[arg(long, default_value = "trade-tui")]
+    pub otel_service_name: String,
 }
 
 impl Cli {

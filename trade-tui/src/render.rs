@@ -2,13 +2,13 @@ use crate::app::{App, Screen};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
-use trade_core::state::{AppState, EventSummary, OrderChain};
+use trade_core::state::{AppState, EventSummary, OrderChain, StrategyView};
 
 pub fn plain_summary(state: &AppState, replay: bool, filter_summary: Option<&str>) -> String {
     let mut summary = format!(
-        "mode={} account={} risk={} strategies={} orders={} positions={} open_alerts={} last_seq={}",
+        "mode={} account={} risk={} strategies={} orders={} positions={} open_alerts={} last_seq={} events_ingested={} events_coalesced={} audit_retained={}",
         if replay { "REPLAY" } else { "READ_ONLY" },
         state.account.account_id,
         state.risk.global_state,
@@ -20,7 +20,10 @@ pub fn plain_summary(state: &AppState, replay: bool, filter_summary: Option<&str
             .connection
             .last_event_sequence
             .map(|seq| seq.to_string())
-            .unwrap_or_else(|| "-".to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        state.connection.events_ingested,
+        state.connection.events_coalesced,
+        state.connection.audit_events_retained
     );
     if let Some(filter_summary) = filter_summary {
         summary.push_str(" filter=\"");
@@ -45,15 +48,20 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     render_status(frame, chunks[0], app);
     render_tabs(frame, chunks[1], app.screen);
     match app.screen {
+        Screen::Help => render_help(frame, chunks[2]),
         Screen::Overview => render_overview(frame, chunks[2], &app.state),
-        Screen::Strategies => render_strategies(frame, chunks[2], &app.state),
+        Screen::Strategies => render_strategies(frame, chunks[2], app),
         Screen::Orders => render_orders(frame, chunks[2], app),
         Screen::Positions => render_positions(frame, chunks[2], &app.state),
         Screen::Risk => render_risk(frame, chunks[2], &app.state),
         Screen::Events => render_events(frame, chunks[2], app),
         Screen::Replay => render_replay(frame, chunks[2], app),
+        Screen::Commands => render_commands(frame, chunks[2], app),
     }
     render_footer(frame, chunks[3], app);
+    if app.dangerous_action.is_some() {
+        render_dangerous_modal(frame, area, app);
+    }
 }
 
 fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -139,6 +147,20 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
                 .unwrap_or_else(|| "-".to_string()),
         ),
         kv("fps", &state.connection.render_fps.to_string()),
+        kv("ingested", &state.connection.events_ingested.to_string()),
+        kv("coalesced", &state.connection.events_coalesced.to_string()),
+        kv(
+            "retained",
+            &state.connection.audit_events_retained.to_string(),
+        ),
+        kv(
+            "md_dropped",
+            &state.connection.dropped_market_updates.to_string(),
+        ),
+        kv(
+            "nats_reconn",
+            &state.connection.nats_reconnect_count.to_string(),
+        ),
         kv("strategies", &state.strategies.by_id.len().to_string()),
         kv("orders", &state.orders.by_correlation_id.len().to_string()),
         kv("positions", &state.positions.by_key.len().to_string()),
@@ -162,25 +184,56 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_widget(panel("Risk", risk), sections[2]);
 }
 
-fn render_strategies(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+fn render_help(frame: &mut Frame<'_>, area: Rect) {
+    let lines = vec![
+        "Terminal cockpit keys".to_string(),
+        String::new(),
+        "F1 Help        F2 Overview     F3 Strategies".to_string(),
+        "F4 Orders      F5 Positions    F6 Risk".to_string(),
+        "F7 Events      F8 Replay       F9 Commands".to_string(),
+        "F10 Exit       Tab next        Shift-Tab previous".to_string(),
+        "/ search       : palette       q/Esc exit view".to_string(),
+        "Up/Down        j/k select rows".to_string(),
+        String::new(),
+        "Risk actions".to_string(),
+        "K global kill switch preview".to_string(),
+        "F flatten symbol preview".to_string(),
+        String::new(),
+        "All actions remain command-envelope previews. Broker execution stays outside trade-tui."
+            .to_string(),
+    ];
+    frame.render_widget(panel("Help", lines), area);
+}
+
+fn render_strategies(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let state = &app.state;
+    let sections = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
+        .split(area);
+
     let mut lines = vec![format!(
-        "{:<24} {:<8} {:<7} {:>7} {:>8} {:>8} {:>8} {:>9}",
-        "STRATEGY", "STATE", "MODE", "UNIV", "SIGNALS", "INTENTS", "ORDERS", "PNL"
+        "  {:<18} {:<7} {:<5} {:>5} {:>5} {:>5}",
+        "STRATEGY", "STATE", "MODE", "SIG", "INT", "ORD"
     )];
-    for strategy in state.strategies.by_id.values() {
-        lines.push(format!(
-            "{:<24} {:<8} {:<7} {:>7} {:>8} {:>8} {:>8} {:>+9.2}",
-            truncate(&strategy.strategy_id, 24),
-            truncate(&strategy.state, 8),
-            truncate(&strategy.mode, 7),
-            strategy.universe_count,
-            strategy.signals,
-            strategy.intents,
-            strategy.orders,
-            strategy.pnl,
+    for (index, strategy) in state
+        .strategies
+        .by_id
+        .values()
+        .filter(|strategy| strategy_matches_search(strategy, &app.search_query))
+        .enumerate()
+    {
+        lines.push(format_strategy_row(
+            strategy,
+            index == app.selected_strategy_index,
         ));
     }
-    frame.render_widget(panel("Strategies", lines), area);
+    frame.render_widget(panel("Strategies", lines), sections[0]);
+
+    let detail = selected_strategy(state, &app.search_query, app.selected_strategy_index)
+        .map(strategy_detail_lines)
+        .unwrap_or_else(|| vec!["no strategy projection".to_string()]);
+    frame.render_widget(panel("Strategy Detail", detail), sections[1]);
 }
 
 fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -194,12 +247,18 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
         "  {:<12} {:<7} {:<4} {:>4}",
         "CORR", "STATE", "SYM", "FILL"
     )];
-    for (index, chain) in state.orders.by_correlation_id.values().enumerate() {
+    for (index, chain) in state
+        .orders
+        .by_correlation_id
+        .values()
+        .filter(|chain| order_matches_search(chain, &app.search_query))
+        .enumerate()
+    {
         rows.push(format_order_row(chain, index == app.selected_order_index));
     }
     frame.render_widget(panel("Order Chains", rows), sections[0]);
 
-    let timeline = selected_chain(state, app.selected_order_index)
+    let timeline = selected_chain(state, &app.search_query, app.selected_order_index)
         .map(|chain| {
             let mut lines = vec![
                 kv_wide("correlation_id", &chain.correlation_id),
@@ -309,12 +368,13 @@ fn render_events(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .iter()
         .rev()
         .take(200)
+        .filter(|event| event_matches_search(event, &app.search_query))
         .enumerate()
         .map(|(index, event)| format_event_row(event, index == app.selected_event_index))
         .collect::<Vec<_>>();
     frame.render_widget(panel("Events / Audit", lines), sections[0]);
 
-    let detail = selected_event(state, app.selected_event_index)
+    let detail = selected_event(state, &app.search_query, app.selected_event_index)
         .map(|event| {
             vec![
                 kv_narrow("seq", &event.sequence.to_string()),
@@ -357,23 +417,108 @@ fn render_replay(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(panel("Replay", lines), area);
 }
 
+fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let lines = vec![
+        "Command palette".to_string(),
+        kv_wide("input", &app.command_palette_input),
+        String::new(),
+        "Replayable tradectl examples".to_string(),
+        "pause-strategy <strategy_id>".to_string(),
+        "resume-strategy <strategy_id>".to_string(),
+        "drain-strategy <strategy_id>".to_string(),
+        "cancel-order <account_id> <order_id>".to_string(),
+        "flatten-symbol <account_id> <symbol> --confirm 'FLATTEN <account_id> <symbol>'"
+            .to_string(),
+        "global-kill-switch <account_id> --confirm 'KILL <account_id>'".to_string(),
+        String::new(),
+        "TUI does not send these commands. Use tradectl or command-gateway audit flow.".to_string(),
+    ];
+    frame.render_widget(panel("Commands", lines), area);
+}
+
+fn render_dangerous_modal(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    let Some(action) = app.dangerous_action.as_ref() else {
+        return;
+    };
+    let modal = centered_rect(74, 60, area);
+    frame.render_widget(Clear, modal);
+
+    let mut lines = vec![
+        "DANGEROUS ACTION".to_string(),
+        String::new(),
+        kv_wide("action", &action.action),
+        kv_wide("target", &action.target),
+        String::new(),
+        "Effect".to_string(),
+    ];
+    for effect in &action.effects {
+        lines.push(format!("- {effect}"));
+    }
+    lines.extend([
+        String::new(),
+        "Type exactly".to_string(),
+        action.expected_confirmation.clone(),
+        kv_wide("input", &app.dangerous_confirmation),
+        String::new(),
+        "Replay with tradectl".to_string(),
+        action.tradectl_replay.clone(),
+        String::new(),
+        "Enter/Esc closes. This modal does not execute the command.".to_string(),
+    ]);
+    frame.render_widget(panel("Confirm", lines), modal);
+}
+
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let text = match app.screen {
-        Screen::Orders | Screen::Events if app.replay => {
-            " REPLAY: no live commands | up/down or j/k select | q exits "
+    let text = if app.dangerous_action.is_some() {
+        " DANGEROUS ACTION: type confirmation | Enter/Esc closes | no command is sent ".to_string()
+    } else if app.command_palette_active {
+        format!(
+            " COMMAND :{} | Enter/Esc closes | Backspace deletes ",
+            app.command_palette_input
+        )
+    } else if app.search_active {
+        format!(
+            " SEARCH /{} | Enter/Esc closes | Backspace deletes ",
+            app.search_query
+        )
+    } else {
+        match app.screen {
+        Screen::Strategies | Screen::Orders | Screen::Events if app.replay => {
+            " REPLAY: / search | no live commands | up/down or j/k select | q exits ".to_string()
         }
-        Screen::Orders | Screen::Events => {
-            " READ ONLY: up/down or j/k select | commands are externalized through tradectl | q exits "
+        Screen::Strategies | Screen::Orders | Screen::Events => {
+            " READ ONLY: / search | up/down or j/k select | commands externalized through tradectl | q exits ".to_string()
         }
-        _ if app.replay => " REPLAY: no live commands | q exits ",
+        _ if app.replay => " REPLAY: no live commands | q exits ".to_string(),
         _ => {
-            " READ ONLY: command execution is externalized through tradectl/command-gateway | q exits "
+            " READ ONLY: command execution is externalized through tradectl/command-gateway | q exits ".to_string()
+        }
         }
     };
     frame.render_widget(
         Paragraph::new(text).style(Style::default().bg(Color::Black).fg(Color::Gray)),
         area,
     );
+}
+
+fn centered_rect(width_pct: u16, height_pct: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - height_pct) / 2),
+            Constraint::Percentage(height_pct),
+            Constraint::Percentage((100 - height_pct) / 2),
+        ])
+        .split(area);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - width_pct) / 2),
+            Constraint::Percentage(width_pct),
+            Constraint::Percentage((100 - width_pct) / 2),
+        ])
+        .split(vertical[1]);
+    horizontal[1]
 }
 
 fn panel(title: &'static str, lines: Vec<String>) -> Paragraph<'static> {
@@ -383,12 +528,127 @@ fn panel(title: &'static str, lines: Vec<String>) -> Paragraph<'static> {
         .wrap(Wrap { trim: false })
 }
 
-fn selected_chain(state: &AppState, selected_index: usize) -> Option<&OrderChain> {
-    state.orders.by_correlation_id.values().nth(selected_index)
+fn selected_chain<'a>(
+    state: &'a AppState,
+    query: &str,
+    selected_index: usize,
+) -> Option<&'a OrderChain> {
+    state
+        .orders
+        .by_correlation_id
+        .values()
+        .filter(|chain| order_matches_search(chain, query))
+        .nth(selected_index)
 }
 
-fn selected_event(state: &AppState, selected_index: usize) -> Option<&EventSummary> {
-    state.audit.events.iter().rev().nth(selected_index)
+fn selected_strategy<'a>(
+    state: &'a AppState,
+    query: &str,
+    selected_index: usize,
+) -> Option<&'a StrategyView> {
+    state
+        .strategies
+        .by_id
+        .values()
+        .filter(|strategy| strategy_matches_search(strategy, query))
+        .nth(selected_index)
+}
+
+fn selected_event<'a>(
+    state: &'a AppState,
+    query: &str,
+    selected_index: usize,
+) -> Option<&'a EventSummary> {
+    state
+        .audit
+        .events
+        .iter()
+        .rev()
+        .take(200)
+        .filter(|event| event_matches_search(event, query))
+        .nth(selected_index)
+}
+
+fn format_strategy_row(strategy: &StrategyView, selected: bool) -> String {
+    format!(
+        "{} {:<18} {:<7} {:<5} {:>5} {:>5} {:>5}",
+        if selected { ">" } else { " " },
+        truncate(&strategy.strategy_id, 18),
+        truncate(&strategy.state, 7),
+        truncate(&strategy.mode, 5),
+        strategy.signals,
+        strategy.intents,
+        strategy.orders,
+    )
+}
+
+fn strategy_detail_lines(strategy: &StrategyView) -> Vec<String> {
+    let mut lines = vec![
+        kv_wide("strategy", &strategy.strategy_id),
+        kv_wide("state", &strategy.state),
+        kv_wide("mode", &strategy.mode),
+        kv_wide("universe", &strategy.universe_count.to_string()),
+        kv_wide("pnl", &format!("{:+.2}", strategy.pnl)),
+        kv_wide(
+            "heartbeat_lag_ms",
+            &strategy
+                .heartbeat_lag_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv_wide(
+            "last_signal_seq",
+            &strategy
+                .last_signal_sequence
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv_wide(
+            "last_intent_seq",
+            &strategy
+                .last_intent_sequence
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv_wide(
+            "last_order_seq",
+            &strategy
+                .last_order_sequence
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv_wide(
+            "last_reason",
+            strategy.last_reason.as_deref().unwrap_or("-"),
+        ),
+        String::new(),
+        "Risk gates".to_string(),
+    ];
+
+    if strategy.risk_gates.is_empty() {
+        lines.push("no risk gate projection".to_string());
+    } else {
+        for gate in &strategy.risk_gates {
+            lines.push(format!(
+                "{} {:<18} {}",
+                mark(gate.passed),
+                truncate(&gate.name, 18),
+                gate.detail
+            ));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Parameters".to_string());
+    if strategy.parameters.is_empty() {
+        lines.push("no parameter projection".to_string());
+    } else {
+        for (key, value) in &strategy.parameters {
+            lines.push(kv_wide(key, value));
+        }
+    }
+
+    lines
 }
 
 fn format_order_row(chain: &OrderChain, selected: bool) -> String {
@@ -411,6 +671,57 @@ fn format_event_row(event: &EventSummary, selected: bool) -> String {
         truncate(&event.aggregate_type, 7),
         truncate(&event.headline, 13)
     )
+}
+
+fn strategy_matches_search(strategy: &StrategyView, query: &str) -> bool {
+    query_matches(
+        query,
+        [
+            strategy.strategy_id.as_str(),
+            strategy.state.as_str(),
+            strategy.mode.as_str(),
+            strategy.last_reason.as_deref().unwrap_or_default(),
+        ],
+    )
+}
+
+fn order_matches_search(chain: &OrderChain, query: &str) -> bool {
+    query_matches(
+        query,
+        [
+            chain.correlation_id.as_str(),
+            chain.strategy_id.as_deref().unwrap_or_default(),
+            chain.account_id.as_deref().unwrap_or_default(),
+            chain.symbol.as_deref().unwrap_or_default(),
+            chain.order_id.as_deref().unwrap_or_default(),
+            chain.broker_order_id.as_deref().unwrap_or_default(),
+        ],
+    )
+}
+
+fn event_matches_search(event: &EventSummary, query: &str) -> bool {
+    query_matches(
+        query,
+        [
+            event.event_type.as_str(),
+            event.aggregate_type.as_str(),
+            event.aggregate_id.as_str(),
+            event.correlation_id.as_str(),
+            event.producer.as_str(),
+            event.headline.as_str(),
+        ],
+    )
+}
+
+fn query_matches<'a>(query: &str, values: impl IntoIterator<Item = &'a str>) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let query = query.to_ascii_lowercase();
+    values
+        .into_iter()
+        .any(|value| value.to_ascii_lowercase().contains(&query))
 }
 
 fn mark(ok: bool) -> &'static str {

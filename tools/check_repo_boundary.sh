@@ -23,7 +23,7 @@ if git ls-files | grep -E '(^|/)(\.env|\.env\..*)$' >/dev/null 2>&1; then
 fi
 
 if rg -n -e 'ib_insync|ibapi|databento|Databento|IBKR|Interactive Brokers|systemctl|nomad |docker exec|sqlite|postgres://|mysql://' \
-  trade-tui tradectl trade-core >/tmp/trade-terminal-cockpit-boundary-rg.txt 2>/dev/null; then
+  trade-tui tradectl trade-core services >/tmp/trade-terminal-cockpit-boundary-rg.txt 2>/dev/null; then
   echo "repo boundary check failed: cockpit crates must stay projection/command-envelope only" >&2
   cat /tmp/trade-terminal-cockpit-boundary-rg.txt >&2
   exit 70

@@ -1,7 +1,7 @@
 use trade_core::events::{
     CancelRejected, CancelRequested, DomainEvent, EventEnvelope, IntentCreated,
     OrderSubmitRequested, OrderSubmitted, PositionSnapshot, RiskDecisionMade, SignalGenerated,
-    StrategyPositionAttribution,
+    StrategyHeartbeat, StrategyPositionAttribution,
 };
 use trade_core::state::OrderLifecycleState;
 use trade_core::{reduce_event, AppState};
@@ -238,4 +238,90 @@ fn position_unrealized_pnl_is_projection_only() {
 
     let position = state.positions.by_key.get("paper-main:AMD").unwrap();
     assert!((position.unrealized_pnl - -9.0).abs() < 0.0001);
+}
+
+#[test]
+fn coalesces_high_frequency_projection_events_without_dropping_lifecycle_events() {
+    let mut state = AppState::default();
+
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-heartbeat-001",
+            "corr-heartbeat",
+            1,
+            "test",
+            DomainEvent::StrategyHeartbeat(StrategyHeartbeat {
+                strategy_id: "open-scalp".to_string(),
+                state: "RUN".to_string(),
+                mode: "PAPER".to_string(),
+                heartbeat_lag_ms: 83,
+            }),
+        ),
+    );
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-heartbeat-002",
+            "corr-heartbeat",
+            2,
+            "test",
+            DomainEvent::StrategyHeartbeat(StrategyHeartbeat {
+                strategy_id: "open-scalp".to_string(),
+                state: "RUN".to_string(),
+                mode: "PAPER".to_string(),
+                heartbeat_lag_ms: 11,
+            }),
+        ),
+    );
+
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-signal-001",
+            "corr-noise-001",
+            3,
+            "test",
+            DomainEvent::SignalGenerated(SignalGenerated {
+                correlation_id: "corr-noise-001".to_string(),
+                strategy_id: "open-scalp".to_string(),
+                symbol: "MU".to_string(),
+                signal_name: "gap_continuation".to_string(),
+                score: Some(0.82),
+                reason: "open-window".to_string(),
+            }),
+        ),
+    );
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-intent-001",
+            "corr-noise-001",
+            4,
+            "test",
+            DomainEvent::IntentCreated(IntentCreated {
+                correlation_id: "corr-noise-001".to_string(),
+                strategy_id: "open-scalp".to_string(),
+                symbol: "MU".to_string(),
+                side: "BUY".to_string(),
+                quantity: 100,
+                reason: "open-window".to_string(),
+            }),
+        ),
+    );
+
+    assert_eq!(state.connection.events_ingested, 4);
+    assert_eq!(state.connection.events_coalesced, 1);
+    assert_eq!(state.audit.events.len(), 3);
+    assert_eq!(state.connection.audit_events_retained, 3);
+    assert!(state
+        .audit
+        .events
+        .iter()
+        .any(|event| event.event_type == "SignalGenerated"));
+    assert!(state
+        .audit
+        .events
+        .iter()
+        .any(|event| event.event_type == "IntentCreated"));
 }

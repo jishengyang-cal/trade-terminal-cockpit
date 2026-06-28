@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod event_stream;
 mod input;
+mod observability;
 mod render;
 mod snapshot_client;
 
@@ -20,6 +21,9 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let otel = cli
+        .otel_stdout
+        .then(|| observability::OtelTelemetry::init_stdout(&cli.otel_service_name));
     let filter = cli.event_filter()?;
     let filter_summary = filter.summary();
     let events = event_stream::load_events(&cli, &filter)?;
@@ -29,6 +33,10 @@ fn main() -> Result<()> {
     }
     state.connection.nats = if cli.replay {
         "replay".to_string()
+    } else if cli.jetstream_stream.is_some() || cli.jetstream_durable.is_some() {
+        "jetstream".to_string()
+    } else if cli.nats_url.is_some() {
+        "nats".to_string()
     } else if cli.snapshot_json.is_some() && cli.event_jsonl.is_none() && !cli.mock {
         "snapshot".to_string()
     } else if cli.event_jsonl.is_some() && !cli.mock {
@@ -41,16 +49,26 @@ fn main() -> Result<()> {
     for event in events {
         reduce_event(&mut state, event);
     }
+    if let Some(otel) = otel.as_ref() {
+        otel.emit_state_snapshot(&state, cli.replay);
+    }
 
-    let event_rx = event_stream::spawn_follow(&cli, filter)?;
+    let event_rx = event_stream::spawn_event_sources(&cli, filter)?;
 
     if cli.plain {
         println!(
             "{}",
             render::plain_summary(&state, cli.replay, filter_summary.as_deref())
         );
+        if let Some(otel) = otel {
+            otel.shutdown()?;
+        }
         return Ok(());
     }
 
-    app::run(state, cli, filter_summary, event_rx)
+    let result = app::run(state, cli, filter_summary, event_rx);
+    if let Some(otel) = otel {
+        otel.shutdown()?;
+    }
+    result
 }

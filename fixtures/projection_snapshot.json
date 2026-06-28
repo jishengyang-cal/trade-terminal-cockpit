@@ -30,7 +30,33 @@
       "pnl": 12.34,
       "heartbeat_lag_ms": 83,
       "last_event_sequence": 41,
-      "last_reason": null
+      "last_reason": null,
+      "last_signal_sequence": 37,
+      "last_intent_sequence": 38,
+      "last_order_sequence": 39,
+      "parameters": {
+        "cooldown_ms": "800",
+        "imbalance_threshold": "0.73",
+        "max_position_usd": "1500",
+        "min_spread_bps": "4"
+      },
+      "risk_gates": [
+        {
+          "name": "market_open_window",
+          "passed": true,
+          "detail": "regular session"
+        },
+        {
+          "name": "quote_freshness",
+          "passed": true,
+          "detail": "83ms"
+        },
+        {
+          "name": "short_permission",
+          "passed": false,
+          "detail": "account is long-only"
+        }
+      ]
     }
   ],
   "orders": [

@@ -40,6 +40,9 @@ Rules:
 trade-core/       event, command, reducer, and view-state types
 trade-tui/        Ratatui/Crossterm read-only terminal cockpit
 tradectl/         non-interactive command-envelope emitter
+services/
+  state-projectiond/  JSONL-to-projection boundary service
+  command-gateway/    command validation/audit boundary service
 contracts/proto/  language-neutral trading contracts
 fixtures/         sanitized projection/event fixtures for local cockpit checks
 .ai/              construction governance profiles and hooks
@@ -77,11 +80,18 @@ tools/open_local_tui.sh --mock
 Useful cockpit keys:
 
 ```text
+F1          help
 F2-F8       switch cockpit screens
+F9          command previews
+F10         exit
 Tab         next screen
 Shift-Tab   previous screen
+/           search current cockpit list
+:           command palette input
 Up/Down     select order chain or event row
 j/k         select order chain or event row
+K           risk page global kill-switch preview
+F           risk page flatten-symbol preview
 q           exit
 ```
 
@@ -119,6 +129,15 @@ cargo run -p trade-tui -- --plain --event-jsonl fixtures/order_lifecycle_events.
   --correlation-id corr-fixture-001
 cargo run -p trade-tui -- --plain --replay --from 2026-06-25T09:30:00 --to 2026-06-25T10:00:00
 cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --follow
+cargo run -p trade-tui -- \
+  --nats-url nats://127.0.0.1:4222 \
+  --nats-subject trading.order.lifecycle.paper-main.ord-demo-001 \
+  --nats-subject trading.risk.decision.open-scalp.MU
+cargo run -p trade-tui -- \
+  --nats-url nats://127.0.0.1:4222 \
+  --jetstream-stream TRADING_EVENTS \
+  --jetstream-durable trade-tui-local \
+  --nats-subject trading.order.lifecycle.paper-main.ord-demo-001
 cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --replay \
   --from 2026-06-25T09:30:00 \
   --to 2026-06-25T10:00:00 \
@@ -133,11 +152,49 @@ cargo run -p tradectl -- \
   --audit-jsonl /tmp/trade-terminal-cockpit-commands.jsonl \
   --pretty \
   pause-strategy open-scalp
+
+cargo run -p trade-tui -- \
+  --plain \
+  --mock \
+  --otel-stdout \
+  --otel-service-name trade-tui-local
 ```
 
 `--audit-jsonl` appends the emitted command envelope to a local evidence file.
 It does not send the command to a broker, risk service, strategy runtime, or
 database.
+
+Projection and command boundary services:
+
+```bash
+cargo run -p state-projectiond -- \
+  --event-jsonl fixtures/order_lifecycle_events.jsonl
+
+cargo run -p tradectl -- \
+  --operator-id operator-demo \
+  --session-id session-demo \
+  --reason smoke-test \
+  --capability strategy.control \
+  pause-strategy open-scalp >/tmp/trade-command.json
+
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-command.json \
+  --audit-jsonl /tmp/trade-command-audit.jsonl
+
+cargo run -p tradectl -- \
+  evidence-bundle \
+  --event-jsonl fixtures/order_lifecycle_events.jsonl \
+  --audit-jsonl /tmp/trade-terminal-cockpit-commands.jsonl \
+  --correlation-id corr-fixture-001 \
+  --output-json /tmp/trade-terminal-cockpit-evidence.json
+```
+
+`command-gateway` validates required operator/session/reason/capability fields
+and writes audit events. It also checks command type against the expected
+capability, with optional `--allow-capability` allowlisting. Dangerous envelopes
+are rejected by default unless the gateway is started with an explicit
+`--allow-dangerous` flag. This repository still does not perform broker
+execution.
 
 Dangerous command example:
 

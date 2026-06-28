@@ -7,6 +7,8 @@ cd "$ROOT_DIR"
 cargo check --workspace
 cargo test --workspace
 cargo run -p trade-tui -- --plain | grep -q 'mode=READ_ONLY'
+cargo run -p trade-tui -- --plain | grep -q 'events_ingested='
+TRADE_TUI_BIN="$ROOT_DIR/target/debug/trade-tui" tools/open_local_tui.sh --plain --mock | grep -q 'mode=READ_ONLY'
 cargo run -p trade-tui -- --plain --replay --from 2026-06-25T09:30:00 --to 2026-06-25T10:00:00 | grep -q 'mode=REPLAY'
 cargo run -p trade-tui -- --plain --symbol MU | grep -q 'filter="symbol=MU"'
 cargo run -p trade-tui -- --plain --snapshot-json fixtures/projection_snapshot.json | grep -q 'account=paper-snapshot'
@@ -21,6 +23,21 @@ cargo run -p trade-tui -- \
 cargo run -p trade-tui -- --help | grep -q -- '--follow'
 cargo run -p trade-tui -- --help | grep -q -- '--correlation-id'
 cargo run -p trade-tui -- --help | grep -q -- '--snapshot-json'
+cargo run -p trade-tui -- --help | grep -q -- '--nats-url'
+cargo run -p trade-tui -- --help | grep -q -- '--nats-subject'
+cargo run -p trade-tui -- --help | grep -q -- '--jetstream-durable'
+cargo run -p trade-tui -- --help | grep -q -- '--otel-stdout'
+rm -f /tmp/trade-terminal-cockpit-otel.out
+cargo run -p trade-tui -- \
+  --plain \
+  --mock \
+  --otel-stdout \
+  --otel-service-name trade-tui-smoke >/tmp/trade-terminal-cockpit-otel.out
+grep -q 'trade_tui.state_projection' /tmp/trade-terminal-cockpit-otel.out
+grep -q 'tui_events_ingested_total' /tmp/trade-terminal-cockpit-otel.out
+cargo run -p state-projectiond -- \
+  --event-jsonl fixtures/order_lifecycle_events.jsonl |
+  grep -q '"source": "state-projectiond-jsonl"'
 cargo run -p tradectl -- \
   --operator-id smoke-operator \
   --session-id smoke-session \
@@ -37,6 +54,41 @@ cargo run -p tradectl -- \
   --audit-jsonl /tmp/trade-terminal-cockpit-audit.jsonl \
   pause-strategy open-scalp | grep -q '"command_type":"PauseStrategyRequested"'
 grep -q '"command_type":"PauseStrategyRequested"' /tmp/trade-terminal-cockpit-audit.jsonl
+
+rm -f /tmp/trade-terminal-cockpit-evidence.json
+cargo run -p tradectl -- \
+  evidence-bundle \
+  --event-jsonl fixtures/order_lifecycle_events.jsonl \
+  --audit-jsonl /tmp/trade-terminal-cockpit-audit.jsonl \
+  --correlation-id corr-fixture-001 \
+  --output-json /tmp/trade-terminal-cockpit-evidence.json
+grep -q '"schema_version":"trading.evidence.v1"' /tmp/trade-terminal-cockpit-evidence.json
+grep -q '"event_count":12' /tmp/trade-terminal-cockpit-evidence.json
+
+cargo run -p tradectl -- \
+  --operator-id smoke-operator \
+  --session-id smoke-session \
+  --reason smoke-test \
+  --capability strategy.control \
+  pause-strategy open-scalp >/tmp/trade-terminal-cockpit-command.json
+rm -f /tmp/trade-terminal-cockpit-gateway-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-gateway-audit.jsonl
+grep -q '"status":"accepted"' /tmp/trade-terminal-cockpit-gateway-audit.jsonl
+
+cargo run -p tradectl -- \
+  --operator-id smoke-operator \
+  --session-id smoke-session \
+  --reason smoke-test \
+  --capability wrong.capability \
+  pause-strategy open-scalp >/tmp/trade-terminal-cockpit-bad-capability-command.json
+rm -f /tmp/trade-terminal-cockpit-bad-capability-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-bad-capability-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-bad-capability-audit.jsonl
+grep -q '"status":"rejected"' /tmp/trade-terminal-cockpit-bad-capability-audit.jsonl
+grep -q 'capability mismatch' /tmp/trade-terminal-cockpit-bad-capability-audit.jsonl
 
 if cargo run -p tradectl -- \
   --operator-id smoke-operator \
@@ -56,6 +108,19 @@ cargo run -p tradectl -- \
   --capability account.kill \
   global-kill-switch paper-main \
   --confirm 'KILL paper-main' | grep -q '"danger_level":"dangerous"'
+
+cargo run -p tradectl -- \
+  --operator-id smoke-operator \
+  --session-id smoke-session \
+  --reason smoke-test \
+  --capability account.kill \
+  global-kill-switch paper-main \
+  --confirm 'KILL paper-main' >/tmp/trade-terminal-cockpit-danger-command.json
+rm -f /tmp/trade-terminal-cockpit-danger-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-danger-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-danger-audit.jsonl
+grep -q '"status":"rejected"' /tmp/trade-terminal-cockpit-danger-audit.jsonl
 
 tools/check_repo_boundary.sh
 

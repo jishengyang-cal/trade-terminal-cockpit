@@ -1,7 +1,8 @@
+use std::collections::BTreeMap;
 use trade_core::events::{DomainEvent, EventEnvelope, OrderFill};
 use trade_core::state::{
     AccountView, AlertView, AppState, OrderChain, OrderLifecycleState, PositionView, RiskView,
-    StrategyPositionView, StrategyView,
+    StrategyPositionView, StrategyRiskGateView, StrategyView,
 };
 use trade_core::{apply_projection_snapshot, reduce_event, ProjectionSnapshot};
 
@@ -102,6 +103,18 @@ fn sample_snapshot() -> ProjectionSnapshot {
             heartbeat_lag_ms: Some(83),
             last_event_sequence: Some(41),
             last_reason: None,
+            last_signal_sequence: Some(37),
+            last_intent_sequence: Some(38),
+            last_order_sequence: Some(39),
+            parameters: BTreeMap::from([
+                ("cooldown_ms".to_string(), "800".to_string()),
+                ("imbalance_threshold".to_string(), "0.73".to_string()),
+            ]),
+            risk_gates: vec![StrategyRiskGateView {
+                name: "quote_freshness".to_string(),
+                passed: true,
+                detail: "83ms".to_string(),
+            }],
         }],
         orders: vec![chain],
         positions: vec![PositionView {

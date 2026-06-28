@@ -1,6 +1,7 @@
 use crate::events::{DomainEvent, EventEnvelope};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EventFilter {
     pub strategy_id: Option<String>,
     pub symbol: Option<String>,

@@ -12,7 +12,17 @@ use crate::state::{
 pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
     state.connection.last_event_sequence = Some(envelope.sequence);
     state.connection.last_event_ts_ns = Some(envelope.publish_ts_ns);
-    state.audit.push(summarize(&envelope));
+    state.connection.events_ingested += 1;
+    let coalescible = is_coalescible_projection_event(&envelope.payload);
+    let summary = summarize(&envelope);
+    if coalescible {
+        if state.audit.push_or_replace_coalesced(summary) {
+            state.connection.events_coalesced += 1;
+        }
+    } else {
+        state.audit.push(summary);
+    }
+    state.connection.audit_events_retained = state.audit.len();
     let sequence = envelope.sequence;
     let publish_ts_ns = envelope.publish_ts_ns;
 
@@ -67,6 +77,13 @@ pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
     }
 }
 
+fn is_coalescible_projection_event(event: &DomainEvent) -> bool {
+    matches!(
+        event,
+        DomainEvent::StrategyHeartbeat(_) | DomainEvent::PositionSnapshot(_)
+    )
+}
+
 fn reduce_strategy_heartbeat(state: &mut AppState, sequence: u64, event: StrategyHeartbeat) {
     let strategy = state.strategies.get_or_insert(&event.strategy_id);
     strategy.state = event.state;
@@ -92,6 +109,7 @@ fn reduce_signal_generated(
     let strategy = state.strategies.get_or_insert(&event.strategy_id);
     strategy.signals += 1;
     strategy.last_event_sequence = Some(sequence);
+    strategy.last_signal_sequence = Some(sequence);
 
     let score = event
         .score
@@ -121,6 +139,7 @@ fn reduce_intent_created(
     let strategy = state.strategies.get_or_insert(&event.strategy_id);
     strategy.intents += 1;
     strategy.last_event_sequence = Some(sequence);
+    strategy.last_intent_sequence = Some(sequence);
 
     let chain = state.orders.get_or_insert_chain(&event.correlation_id);
     chain.strategy_id = Some(event.strategy_id);
@@ -238,7 +257,9 @@ fn reduce_order_submitted(
         .orders
         .index_order(&event.account_id, &event.order_id, &event.correlation_id);
     if let Some(strategy_id) = strategy_id {
-        state.strategies.get_or_insert(&strategy_id).orders += 1;
+        let strategy = state.strategies.get_or_insert(&strategy_id);
+        strategy.orders += 1;
+        strategy.last_order_sequence = Some(sequence);
     }
     state.account.account_id = event.account_id;
     state.account.broker = event.broker;

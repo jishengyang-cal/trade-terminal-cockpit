@@ -1,5 +1,5 @@
 [package]
-name = "tradectl"
+name = "command-gateway"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,5 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 trade-core.workspace = true

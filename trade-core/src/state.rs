@@ -36,6 +36,12 @@ pub struct ConnectionState {
     pub render_fps: u16,
     pub last_event_sequence: Option<u64>,
     pub last_event_ts_ns: Option<i64>,
+    pub events_ingested: u64,
+    pub events_coalesced: u64,
+    pub audit_events_retained: usize,
+    pub dropped_market_updates: u64,
+    pub nats_reconnect_count: u64,
+    pub command_roundtrip_ms: u64,
 }
 
 impl Default for ConnectionState {
@@ -47,6 +53,12 @@ impl Default for ConnectionState {
             render_fps: 20,
             last_event_sequence: None,
             last_event_ts_ns: None,
+            events_ingested: 0,
+            events_coalesced: 0,
+            audit_events_retained: 0,
+            dropped_market_updates: 0,
+            nats_reconnect_count: 0,
+            command_roundtrip_ms: 0,
         }
     }
 }
@@ -114,6 +126,16 @@ pub struct StrategyView {
     pub heartbeat_lag_ms: Option<u64>,
     pub last_event_sequence: Option<u64>,
     pub last_reason: Option<String>,
+    #[serde(default)]
+    pub last_signal_sequence: Option<u64>,
+    #[serde(default)]
+    pub last_intent_sequence: Option<u64>,
+    #[serde(default)]
+    pub last_order_sequence: Option<u64>,
+    #[serde(default)]
+    pub parameters: BTreeMap<String, String>,
+    #[serde(default)]
+    pub risk_gates: Vec<StrategyRiskGateView>,
 }
 
 impl StrategyView {
@@ -130,8 +152,20 @@ impl StrategyView {
             heartbeat_lag_ms: None,
             last_event_sequence: None,
             last_reason: None,
+            last_signal_sequence: None,
+            last_intent_sequence: None,
+            last_order_sequence: None,
+            parameters: BTreeMap::new(),
+            risk_gates: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StrategyRiskGateView {
+    pub name: String,
+    pub passed: bool,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -378,6 +412,22 @@ impl EventRingBuffer {
             self.events.pop_front();
         }
         self.events.push_back(event);
+    }
+
+    pub fn push_or_replace_coalesced(&mut self, event: EventSummary) -> bool {
+        if let Some(existing) = self.events.iter_mut().rev().find(|existing| {
+            existing.event_type == event.event_type && existing.aggregate_id == event.aggregate_id
+        }) {
+            *existing = event;
+            return true;
+        }
+
+        self.push(event);
+        false
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
     }
 }
 

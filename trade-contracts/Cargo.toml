@@ -1,5 +1,5 @@
 [package]
-name = "tradectl"
+name = "trade-contracts"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,8 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-anyhow.workspace = true
-clap.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-trade-core.workspace = true
+prost.workspace = true
+
+[build-dependencies]
+prost-build.workspace = true

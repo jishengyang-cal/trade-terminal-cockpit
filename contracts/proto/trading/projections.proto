@@ -31,6 +31,17 @@ message StrategySnapshot {
   uint64 orders = 7;
   double pnl = 8;
   uint64 heartbeat_lag_ms = 9;
+  map<string, string> parameters = 10;
+  repeated StrategyRiskGate risk_gates = 11;
+  optional uint64 last_signal_sequence = 12;
+  optional uint64 last_intent_sequence = 13;
+  optional uint64 last_order_sequence = 14;
+}
+
+message StrategyRiskGate {
+  string name = 1;
+  bool passed = 2;
+  string detail = 3;
 }
 
 message OrderTimelineEntry {
