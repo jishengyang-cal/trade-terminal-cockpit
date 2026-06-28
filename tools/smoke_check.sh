@@ -122,6 +122,74 @@ cargo run -p command-gateway -- \
   --audit-jsonl /tmp/trade-terminal-cockpit-danger-audit.jsonl
 grep -q '"status":"rejected"' /tmp/trade-terminal-cockpit-danger-audit.jsonl
 
+cat >/tmp/trade-terminal-cockpit-fake-broker-control <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >/tmp/trade-terminal-cockpit-fake-broker-control.args
+[[ "$1" == "--write-runtime-control-plan" ]]
+printf 'fake broker-control runtime plan written\n'
+EOF
+chmod +x /tmp/trade-terminal-cockpit-fake-broker-control
+mkdir -p /tmp/trade-terminal-cockpit-broker-runtime
+
+cargo run -p tradectl -- \
+  --operator-id smoke-operator \
+  --session-id smoke-session \
+  --reason smoke-test \
+  --capability account.kill \
+  global-kill-switch global \
+  --confirm 'KILL global' >/tmp/trade-terminal-cockpit-global-kill-command.json
+rm -f /tmp/trade-terminal-cockpit-global-kill-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-global-kill-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-global-kill-audit.jsonl \
+  --allow-dangerous \
+  --execute-broker-control \
+  --broker-runtime-dir /tmp/trade-terminal-cockpit-broker-runtime \
+  --broker-control-bin /tmp/trade-terminal-cockpit-fake-broker-control
+grep -q '"status":"dispatched"' /tmp/trade-terminal-cockpit-global-kill-audit.jsonl
+grep -q -- '--family global_kill' /tmp/trade-terminal-cockpit-fake-broker-control.args
+grep -q -- '--scope global' /tmp/trade-terminal-cockpit-fake-broker-control.args
+
+cargo run -p tradectl -- \
+  --operator-id smoke-operator \
+  --session-id smoke-session \
+  --reason smoke-test \
+  --capability order.cancel \
+  cancel-all-orders-for-symbol paper-main '*' \
+  --confirm 'CANCEL ALL paper-main *' >/tmp/trade-terminal-cockpit-account-cancel-all-command.json
+rm -f /tmp/trade-terminal-cockpit-account-cancel-all-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-account-cancel-all-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-account-cancel-all-audit.jsonl \
+  --allow-dangerous \
+  --execute-broker-control \
+  --broker-runtime-dir /tmp/trade-terminal-cockpit-broker-runtime \
+  --broker-control-bin /tmp/trade-terminal-cockpit-fake-broker-control \
+  --broker-account-slot paper-main=7
+grep -q '"status":"dispatched"' /tmp/trade-terminal-cockpit-account-cancel-all-audit.jsonl
+grep -q -- '--family cancel_all' /tmp/trade-terminal-cockpit-fake-broker-control.args
+grep -q -- '--scope account_slot' /tmp/trade-terminal-cockpit-fake-broker-control.args
+grep -q -- '--account-slot 7' /tmp/trade-terminal-cockpit-fake-broker-control.args
+
+cargo run -p tradectl -- \
+  --operator-id smoke-operator \
+  --session-id smoke-session \
+  --reason smoke-test \
+  --capability account.flatten \
+  flatten-symbol paper-main MU \
+  --confirm 'FLATTEN paper-main MU' >/tmp/trade-terminal-cockpit-flatten-command.json
+rm -f /tmp/trade-terminal-cockpit-flatten-audit.jsonl
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-flatten-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-flatten-audit.jsonl \
+  --allow-dangerous \
+  --execute-broker-control \
+  --broker-runtime-dir /tmp/trade-terminal-cockpit-broker-runtime \
+  --broker-control-bin /tmp/trade-terminal-cockpit-fake-broker-control
+grep -q '"status":"unsupported_execution"' /tmp/trade-terminal-cockpit-flatten-audit.jsonl
+grep -q 'no scope broadening' /tmp/trade-terminal-cockpit-flatten-audit.jsonl
+
 tools/check_repo_boundary.sh
 
 echo "trade-terminal-cockpit smoke passed"

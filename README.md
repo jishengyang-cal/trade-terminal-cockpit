@@ -29,8 +29,11 @@ Rules:
 - `tradectl` emits command envelopes. It does not execute commands.
 - Dangerous commands require exact confirmation text and remain replayable from
   the CLI.
-- Broker execution, risk authority, strategy runtime, market data adapters,
-  command-gateway, projection daemon, and audit storage stay outside this repo.
+- Broker execution, risk authority, strategy runtime, market data adapters, and
+  audit storage stay outside this repo. The included `command-gateway` is the
+  boundary process; it can optionally dispatch to an external
+  `broker-control-gateway` binary, but it does not link broker crates or call a
+  broker API directly.
 - Existing terminal/display repos and Xu Ya design/calculation work are design
   references only. This repo must not import their crates or internal modules.
 
@@ -161,8 +164,8 @@ cargo run -p trade-tui -- \
 ```
 
 `--audit-jsonl` appends the emitted command envelope to a local evidence file.
-It does not send the command to a broker, risk service, strategy runtime, or
-database.
+`tradectl` does not execute the command; execution is always through
+`command-gateway`.
 
 Projection and command boundary services:
 
@@ -193,8 +196,49 @@ cargo run -p tradectl -- \
 and writes audit events. It also checks command type against the expected
 capability, with optional `--allow-capability` allowlisting. Dangerous envelopes
 are rejected by default unless the gateway is started with an explicit
-`--allow-dangerous` flag. This repository still does not perform broker
-execution.
+`--allow-dangerous` flag.
+
+With `--execute-broker-control`, the gateway can dispatch semantically exact
+runtime controls to an external `broker-control-gateway`:
+
+```bash
+cargo run -p tradectl -- \
+  --operator-id operator-demo \
+  --session-id session-demo \
+  --reason emergency-test \
+  --capability account.kill \
+  global-kill-switch global \
+  --confirm 'KILL global' >/tmp/trade-global-kill.json
+
+BROKER_RUNTIME_DIR="$HOME/.local/state/broker-core/runtime" \
+BROKER_CONTROL_BIN="$HOME/.local/bin/broker-control-gateway" \
+cargo run -p command-gateway -- \
+  --command-json /tmp/trade-global-kill.json \
+  --audit-jsonl /tmp/trade-command-audit.jsonl \
+  --allow-dangerous \
+  --execute-broker-control
+```
+
+Supported broker-control mappings:
+
+```text
+GlobalKillSwitchRequested account_id=global|all|*
+  -> broker-control family=global_kill scope=global mode=assert
+
+FlattenSymbolRequested account_id=global|all|* symbol=*
+  -> broker-control family=flatten_only scope=global mode=assert
+
+CancelAllOrdersForSymbolRequested account_id=global|all|* symbol=*
+  -> broker-control family=cancel_all scope=global mode=assert
+
+FlattenSymbolRequested or CancelAllOrdersForSymbolRequested with symbol=*
+and --broker-account-slot ACCOUNT_ID=SLOT
+  -> broker-control scope=account_slot mode=assert
+```
+
+Single-symbol flatten/cancel-all, single-order cancel, and strategy controls are
+not widened to account/global scope. They are audited as `unsupported_execution`
+until the matching order-gateway or strategy-control adapter exists.
 
 Dangerous command example:
 
