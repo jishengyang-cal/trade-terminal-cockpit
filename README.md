@@ -265,6 +265,12 @@ risk adapter, verifies a dangerous command is rejected, and forwards command
 audit JSONL into `TRADING_AUDIT`. It does not execute broker-control, cancel,
 flatten, or kill actions.
 
+The included `tools/risk_command_adapter.py` keeps the command path fast by
+separating liveness from per-command authority checks. `--adapter-probe` runs
+the external risk-engine liveness check and writes a short TTL cache under
+`XDG_RUNTIME_DIR`; `--check-command-risk` reads only a fresh cache for
+controlled commands. Dangerous commands are not approved from cached liveness.
+
 `trade-terminal-cockpit-command-gateway.service` does not enable broker-control
 execution by default. Set `TRADE_COCKPIT_ENABLE_BROKER_CONTROL=1` only when the
 broker runtime, account-slot mapping, operator policy, and risk adapter are all
@@ -283,6 +289,9 @@ tools/verify_on_google_vm.sh
 
 GitHub Actions is kept as a manual `workflow_dispatch` fallback. The normal
 local replacement for GitHub-hosted CI is `tools/verify_on_google_vm.sh`.
+The VM script defaults to `ssh -F /dev/null` so a broken local global
+`ssh_config` cannot move compilation back to the workstation; set
+`TRADE_COCKPIT_SSH_CONFIG_FILE` only when a specific SSH config is required.
 
 Useful VM checks:
 
