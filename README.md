@@ -190,10 +190,12 @@ with subjects like `trading.event.>`. Command authority/audit events belong in
 `TRADING_AUDIT` on `trading.command.>` / `trading.audit.>`, so the two streams
 do not overlap.
 
-Install the local user-unit templates and create the editable profile:
+Create the editable local profile if it does not already exist:
 
 ```bash
-tools/install_local_systemd.sh
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/trade-terminal-cockpit"
+cp -n config/external.env.example \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/trade-terminal-cockpit/external.env"
 ```
 
 Then edit:
@@ -204,6 +206,8 @@ $XDG_CONFIG_HOME/trade-terminal-cockpit/external.env
 
 Before starting services, run the preflight. It checks that the configured NATS
 JetStream stream exists, that it is not an OPS/control-bus stream, and that
+the event projection subject is a bounded `trading.event.*` namespace, not a
+hot/raw/control namespace or a broad `trading.>` catch-all. It also checks that
 configured risk/broker/order adapters are present:
 
 ```bash
@@ -225,12 +229,22 @@ Open the local TUI against the external profile:
 tools/open_external_tui.sh
 ```
 
-Start the boundary services only after preflight is green:
+The local user services are managed by the Imperativ target-runtime registry,
+not by ad hoc shell commands. Inspect and plan through
+`$HOME/projects/imperativ-main`:
 
 ```bash
-systemctl --user start trade-terminal-cockpit-state-projectiond.service
-systemctl --user start trade-terminal-cockpit-command-gateway.service
+cd "$HOME/projects/imperativ-main"
+python3 tools/target_machine_runtime_control.py validate --json
+python3 tools/target_machine_runtime_control.py status service.trade_terminal_cockpit.projectiond --json
+python3 tools/target_machine_runtime_control.py status service.trade_terminal_cockpit.command_gateway --json
+python3 tools/target_machine_runtime_control.py plan service.trade_terminal_cockpit.projectiond start --json
+python3 tools/target_machine_runtime_control.py plan service.trade_terminal_cockpit.command_gateway start --json
 ```
+
+The printed shell commands are evidence for the CommandGateway handoff, not
+permission to run `systemctl` directly. Mutating actions must go through the
+Imperativ Workbench/control-plane approval path.
 
 Run a non-broker end-to-end verification:
 
@@ -284,13 +298,13 @@ cargo run -p trade-tui -- --plain --replay --from 2026-06-25T09:30:00 --to 2026-
 cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --follow
 cargo run -p trade-tui -- \
   --nats-url nats://127.0.0.1:4222 \
-  --nats-subject trading.order.lifecycle.paper-main.ord-demo-001 \
-  --nats-subject trading.risk.decision.open-scalp.MU
+  --nats-subject trading.event.order.lifecycle.paper-main.ord-demo-001 \
+  --nats-subject trading.event.risk.decision.open-scalp.MU
 cargo run -p trade-tui -- \
   --nats-url nats://127.0.0.1:4222 \
   --jetstream-stream TRADING_EVENTS \
   --jetstream-durable trade-tui-local \
-  --nats-subject trading.order.lifecycle.paper-main.ord-demo-001
+  --nats-subject trading.event.order.lifecycle.paper-main.ord-demo-001
 cargo run -p trade-tui -- --event-jsonl /path/to/events.jsonl --replay \
   --from 2026-06-25T09:30:00 \
   --to 2026-06-25T10:00:00 \
@@ -352,7 +366,7 @@ cargo run -p state-projectiond -- \
   --event-store-uri postgres://redacted/event_store \
   --event-store-timeout-ms 5000 \
   --nats-url nats://127.0.0.1:4222 \
-  --nats-subject 'trading.>' \
+  --nats-subject 'trading.event.>' \
   --event-codec protobuf
 
 cargo run -p state-projectiond -- \

@@ -15,7 +15,22 @@ from urllib.parse import urlparse
 
 
 CONTROL_BUS_STREAM_PREFIXES = ("OPS_",)
-CONTROL_BUS_SUBJECT_PREFIXES = ("ops.",)
+FORBIDDEN_TRADING_SUBJECT_PREFIXES = (
+    "ops.",
+    "control.",
+    "hot.runtime.",
+    "hfmkt.",
+    "hfxuni.",
+    "market.raw.",
+    "marketdata.raw.",
+    "news.raw.",
+    "raw.",
+    "broker.order.command.",
+    "risk.command.",
+    "account.command.",
+)
+FORBIDDEN_TRADING_SUBJECTS = (">", "trading.>")
+REQUIRED_EVENT_SUBJECT_PREFIX = "trading.event."
 
 
 @dataclass(frozen=True)
@@ -176,7 +191,17 @@ def is_control_bus_stream(stream: str) -> bool:
 
 
 def is_control_bus_subject(subject: str) -> bool:
-    return subject.lower().startswith(CONTROL_BUS_SUBJECT_PREFIXES)
+    return subject.lower().startswith(("ops.", "control."))
+
+
+def is_forbidden_trading_subject(subject: str) -> bool:
+    normalized = subject.strip().lower()
+    return normalized in FORBIDDEN_TRADING_SUBJECTS or normalized.startswith(FORBIDDEN_TRADING_SUBJECT_PREFIXES)
+
+
+def is_trading_event_subject(subject: str) -> bool:
+    normalized = subject.strip().lower()
+    return normalized == "trading.event.>" or normalized.startswith(REQUIRED_EVENT_SUBJECT_PREFIX)
 
 
 def subject_compatible(config_subjects: list[str], requested: str) -> bool:
@@ -248,7 +273,7 @@ def stream_names(nc: NatsLite) -> list[str]:
 def run_checks(values: dict[str, str]) -> tuple[list[Check], dict]:
     nats_url = env_value(values, "TRADE_COCKPIT_NATS_URL", "nats://127.0.0.1:14222")
     stream = env_value(values, "TRADE_COCKPIT_JETSTREAM_STREAM", "TRADING_EVENTS")
-    subject = env_value(values, "TRADE_COCKPIT_NATS_SUBJECT", "trading.>")
+    subject = env_value(values, "TRADE_COCKPIT_NATS_SUBJECT", "trading.event.>")
     codec = env_value(values, "TRADE_COCKPIT_EVENT_CODEC", "protobuf")
     enable_broker = env_value(values, "TRADE_COCKPIT_ENABLE_BROKER_CONTROL", "0") == "1"
 
@@ -261,16 +286,16 @@ def run_checks(values: dict[str, str]) -> tuple[list[Check], dict]:
         "broker_control_enabled": enable_broker,
     }
 
-    if is_control_bus_stream(stream) or is_control_bus_subject(subject):
+    if is_control_bus_stream(stream) or is_control_bus_subject(subject) or is_forbidden_trading_subject(subject) or not is_trading_event_subject(subject):
         checks.append(
             Check(
                 "domain_stream_boundary",
                 False,
-                "refusing OPS/control-bus stream for trading-domain cockpit events",
+                "cockpit event projection must use trading.event.* and must not subscribe to ops/control/hot/raw authority namespaces",
             )
         )
     else:
-        checks.append(Check("domain_stream_boundary", True, "trading-domain stream requested"))
+        checks.append(Check("domain_stream_boundary", True, "trading.event projection stream requested"))
 
     try:
         with NatsLite(nats_url, name="trade-cockpit-preflight") as nc:

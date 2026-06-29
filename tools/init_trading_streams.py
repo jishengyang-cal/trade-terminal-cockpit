@@ -45,7 +45,7 @@ def main() -> int:
     values = load_env_file(args.env_file)
     nats_url = env_value(values, "TRADE_COCKPIT_NATS_URL", "nats://127.0.0.1:14222")
     event_stream = env_value(values, "TRADE_COCKPIT_JETSTREAM_STREAM", "TRADING_EVENTS")
-    event_subject = env_value(values, "TRADE_COCKPIT_NATS_SUBJECT", "trading.>")
+    event_subject = env_value(values, "TRADE_COCKPIT_NATS_SUBJECT", "trading.event.>")
     audit_stream = env_value(values, "TRADE_COCKPIT_AUDIT_STREAM", "TRADING_AUDIT")
     audit_subjects = [
         item.strip()
