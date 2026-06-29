@@ -1,5 +1,4 @@
 use crate::cli::Cli;
-use crate::event_codec::{decode_event_envelope, EventCodec};
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use std::fs::{self, File};
@@ -9,7 +8,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 use trade_core::events::IngestDiagnosticRecorded;
-use trade_core::{DomainEvent, EventEnvelope, EventFilter};
+use trade_core::{decode_event_envelope, DomainEvent, EventCodec, EventEnvelope, EventFilter};
 
 pub fn load_events(cli: &Cli, filter: &EventFilter) -> Result<Vec<EventEnvelope>> {
     let events = if cli.event_store_query_bin.is_some() {

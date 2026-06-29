@@ -52,7 +52,11 @@ cargo run -p trade-tui -- --help | grep -q -- '--risk-check-bin'
 cargo run -p trade-tui -- --help | grep -q -- '--strategy-control-bin'
 cargo run -p command-gateway -- --help | grep -q -- '--serve'
 cargo run -p command-gateway -- --help | grep -q -- '--risk-check-bin'
+cargo run -p command-gateway -- --help | grep -q -- '--adapter-timeout-ms'
 cargo run -p state-projectiond -- --help | grep -q -- '--serve'
+cargo run -p state-projectiond -- --help | grep -q -- '--event-codec'
+cargo run -p state-projectiond -- --help | grep -q -- '--event-store-query-bin'
+cargo run -p state-projectiond -- --help | grep -q -- '--event-store-timeout-ms'
 rm -f /tmp/trade-terminal-cockpit-otel.out
 cargo run -p trade-tui -- \
   --plain \
@@ -100,6 +104,29 @@ cargo run -p trade-tui -- \
   --correlation-id corr-fixture-001 |
   grep -q 'orders=1 positions=1 open_alerts=1 last_seq=12'
 grep -q '"correlation_id":"corr-fixture-001"' /tmp/trade-terminal-cockpit-fake-event-store.request
+
+cargo run -p state-projectiond -- \
+  --event-store-query-bin /tmp/trade-terminal-cockpit-fake-event-store \
+  --event-store-uri postgres://redacted/event_store |
+  grep -q '"source": "state-projectiond-event-store"'
+grep -q '"event_store_uri":"postgres://redacted/event_store"' /tmp/trade-terminal-cockpit-fake-event-store.request
+
+cat >/tmp/trade-terminal-cockpit-slow-event-store <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--query-events" ]]
+cat >/tmp/trade-terminal-cockpit-slow-event-store.request
+sleep 1
+EOF
+chmod +x /tmp/trade-terminal-cockpit-slow-event-store
+if cargo run -p state-projectiond -- \
+  --event-store-query-bin /tmp/trade-terminal-cockpit-slow-event-store \
+  --event-store-timeout-ms 1 >/tmp/trade-terminal-cockpit-slow-event-store.out 2>&1; then
+  echo "slow event-store adapter unexpectedly completed" >&2
+  cat /tmp/trade-terminal-cockpit-slow-event-store.out >&2
+  exit 72
+fi
+grep -q 'timed out after' /tmp/trade-terminal-cockpit-slow-event-store.out
 
 cargo run -p tradectl -- \
   --operator-id smoke-operator \
@@ -192,6 +219,25 @@ cargo run -p command-gateway -- \
   --strategy-control-bin /tmp/trade-terminal-cockpit-fake-strategy-control
 grep -q '"status":"dispatched"' /tmp/trade-terminal-cockpit-strategy-adapter-audit.jsonl
 grep -q 'strategy adapter dispatched' /tmp/trade-terminal-cockpit-strategy-adapter-audit.jsonl
+
+cat >/tmp/trade-terminal-cockpit-slow-strategy-control <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "--execute-command" ]]
+cat >/tmp/trade-terminal-cockpit-slow-strategy-control.command
+sleep 1
+EOF
+chmod +x /tmp/trade-terminal-cockpit-slow-strategy-control
+if cargo run -p command-gateway -- \
+  --command-json /tmp/trade-terminal-cockpit-command.json \
+  --audit-jsonl /tmp/trade-terminal-cockpit-slow-adapter-audit.jsonl \
+  --strategy-control-bin /tmp/trade-terminal-cockpit-slow-strategy-control \
+  --adapter-timeout-ms 1 >/tmp/trade-terminal-cockpit-slow-adapter.out 2>&1; then
+  echo "slow external adapter unexpectedly completed" >&2
+  cat /tmp/trade-terminal-cockpit-slow-adapter.out >&2
+  exit 71
+fi
+grep -q 'timed out after' /tmp/trade-terminal-cockpit-slow-adapter.out
 
 cargo run -p tradectl -- \
   --operator-id smoke-operator \

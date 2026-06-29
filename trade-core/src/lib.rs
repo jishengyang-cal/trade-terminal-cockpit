@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod event_codec;
 pub mod events;
 pub mod filter;
 pub mod projection;
@@ -8,6 +9,7 @@ pub mod state;
 pub mod types;
 
 pub use commands::{CommandEnvelope, CommandPayload, DangerLevel};
+pub use event_codec::{decode_event_envelope, EventCodec};
 pub use events::{DomainEvent, EventEnvelope};
 pub use filter::EventFilter;
 pub use projection::{apply_projection_snapshot, ProjectionSnapshot};

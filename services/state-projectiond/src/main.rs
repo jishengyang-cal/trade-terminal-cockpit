@@ -7,12 +7,16 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Arc, RwLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use trade_core::events::IngestDiagnosticRecorded;
 use trade_core::state::{AlertView, AppState};
-use trade_core::{reduce_event, DomainEvent, EventEnvelope, ProjectionSnapshot};
+use trade_core::EventFilter;
+use trade_core::{
+    decode_event_envelope, reduce_event, DomainEvent, EventCodec, EventEnvelope, ProjectionSnapshot,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "state-projectiond")]
@@ -21,11 +25,23 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     event_jsonl: Option<PathBuf>,
 
+    #[arg(long, value_name = "PATH")]
+    event_store_query_bin: Option<PathBuf>,
+
+    #[arg(long, value_name = "URI")]
+    event_store_uri: Option<String>,
+
+    #[arg(long, default_value_t = 5000)]
+    event_store_timeout_ms: u64,
+
     #[arg(long, value_name = "URL")]
     nats_url: Option<String>,
 
     #[arg(long = "nats-subject", value_name = "SUBJECT", requires = "nats_url")]
     nats_subjects: Vec<String>,
+
+    #[arg(long, default_value = "json", value_parser = ["json", "protobuf"])]
+    event_codec: String,
 
     #[arg(long, value_name = "STREAM", requires = "nats_url")]
     jetstream_stream: Option<String>,
@@ -45,14 +61,11 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut state = if let Some(path) = cli.event_jsonl.as_ref() {
-        load_state(path)?
-    } else {
-        AppState::default()
-    };
+    let mut state = load_state(&cli)?;
     state.connection.nats = projection_source(&cli);
     let state = Arc::new(RwLock::new(state));
-    spawn_live_ingest(&cli, state.clone())?;
+    let event_codec = cli.event_codec.parse::<EventCodec>()?;
+    spawn_live_ingest(&cli, event_codec, state.clone())?;
 
     if let Some(addr) = cli.serve.as_deref() {
         return serve_projection(addr, state, cli.schema_version);
@@ -71,10 +84,27 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn load_state(path: &PathBuf) -> Result<AppState> {
+fn load_state(cli: &Cli) -> Result<AppState> {
+    let mut state = AppState::default();
+    if let Some(path) = cli.event_jsonl.as_ref() {
+        reduce_events(&mut state, load_events_jsonl(path)?);
+    }
+    if cli.event_store_query_bin.is_some() {
+        reduce_events(&mut state, load_events_from_event_store(cli)?);
+    }
+    Ok(state)
+}
+
+fn reduce_events(state: &mut AppState, events: impl IntoIterator<Item = EventEnvelope>) {
+    for event in events {
+        reduce_event(state, event);
+    }
+}
+
+fn load_events_jsonl(path: &PathBuf) -> Result<Vec<EventEnvelope>> {
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let mut state = AppState::default();
+    let mut events = Vec::new();
     for (index, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
@@ -87,9 +117,105 @@ fn load_state(path: &PathBuf) -> Result<AppState> {
                 path.display()
             )
         })?;
-        reduce_event(&mut state, event);
+        events.push(event);
     }
-    Ok(state)
+    Ok(events)
+}
+
+fn load_events_from_event_store(cli: &Cli) -> Result<Vec<EventEnvelope>> {
+    let bin = cli
+        .event_store_query_bin
+        .as_ref()
+        .expect("checked by caller");
+    let mut process = Command::new(bin)
+        .arg("--query-events")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to launch event-store adapter {}", bin.display()))?;
+    {
+        let mut stdin = process
+            .stdin
+            .take()
+            .context("event-store adapter stdin unavailable")?;
+        let request = serde_json::json!({
+            "event_store_uri": cli.event_store_uri,
+            "filter": EventFilter::default(),
+        });
+        writeln!(stdin, "{}", serde_json::to_string(&request)?)?;
+    }
+    let output = wait_with_timeout(
+        process,
+        Duration::from_millis(cli.event_store_timeout_ms.max(1)),
+        &format!("event-store adapter {}", bin.display()),
+    )?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "event-store adapter {} exited with {}: {}",
+            bin.display(),
+            output
+                .status
+                .code()
+                .map_or_else(|| "signal".to_string(), |code| code.to_string()),
+            compact_process_text(&output.stderr)
+        );
+    }
+    decode_event_jsonl_bytes(&output.stdout, "event-store adapter stdout")
+}
+
+fn wait_with_timeout(mut process: Child, timeout: Duration, label: &str) -> Result<Output> {
+    let start = Instant::now();
+    loop {
+        if process
+            .try_wait()
+            .with_context(|| format!("failed to poll {label}"))?
+            .is_some()
+        {
+            return process
+                .wait_with_output()
+                .with_context(|| format!("failed to collect {label} output"));
+        }
+        if start.elapsed() >= timeout {
+            let _ = process.kill();
+            let output = process
+                .wait_with_output()
+                .with_context(|| format!("failed to collect timed out {label} output"))?;
+            anyhow::bail!(
+                "{label} timed out after {}ms stderr={}",
+                timeout.as_millis(),
+                compact_process_text(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn decode_event_jsonl_bytes(bytes: &[u8], source: &str) -> Result<Vec<EventEnvelope>> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut events = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let event = serde_json::from_str::<EventEnvelope>(line)
+            .with_context(|| format!("failed to decode {source} line {}", index + 1))?;
+        events.push(event);
+    }
+    Ok(events)
+}
+
+fn compact_process_text(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        "<empty>".to_string()
+    } else if compact.chars().count() > 240 {
+        format!("{}...", compact.chars().take(240).collect::<String>())
+    } else {
+        compact
+    }
 }
 
 fn projection_source(cli: &Cli) -> String {
@@ -97,6 +223,8 @@ fn projection_source(cli: &Cli) -> String {
         "state-projectiond-jetstream".to_string()
     } else if cli.nats_url.is_some() {
         "state-projectiond-nats".to_string()
+    } else if cli.event_store_query_bin.is_some() {
+        "state-projectiond-event-store".to_string()
     } else if cli.event_jsonl.is_some() {
         "state-projectiond-jsonl".to_string()
     } else {
@@ -104,7 +232,11 @@ fn projection_source(cli: &Cli) -> String {
     }
 }
 
-fn spawn_live_ingest(cli: &Cli, state: Arc<RwLock<AppState>>) -> Result<()> {
+fn spawn_live_ingest(
+    cli: &Cli,
+    event_codec: EventCodec,
+    state: Arc<RwLock<AppState>>,
+) -> Result<()> {
     let Some(url) = cli.nats_url.as_deref() else {
         return Ok(());
     };
@@ -118,13 +250,14 @@ fn spawn_live_ingest(cli: &Cli, state: Arc<RwLock<AppState>>) -> Result<()> {
             stream.to_string(),
             durable.to_string(),
             cli.nats_subjects.clone(),
+            event_codec,
             state,
         )?;
         return Ok(());
     }
 
     for subject in &cli.nats_subjects {
-        spawn_nats_subject(url.to_string(), subject.clone(), state.clone())?;
+        spawn_nats_subject(url.to_string(), subject.clone(), event_codec, state.clone())?;
     }
     Ok(())
 }
@@ -134,6 +267,7 @@ fn spawn_jetstream_consumer(
     stream_name: String,
     durable_name: String,
     subjects: Vec<String>,
+    event_codec: EventCodec,
     state: Arc<RwLock<AppState>>,
 ) -> Result<()> {
     thread::Builder::new()
@@ -164,9 +298,15 @@ fn spawn_jetstream_consumer(
             };
             runtime.block_on(async move {
                 loop {
-                    if let Err(error) =
-                        run_jetstream_once(&url, &stream_name, &durable_name, &subjects, &state)
-                            .await
+                    if let Err(error) = run_jetstream_once(
+                        &url,
+                        &stream_name,
+                        &durable_name,
+                        &subjects,
+                        event_codec,
+                        &state,
+                    )
+                    .await
                     {
                         apply_ingest_diagnostic(
                             &state,
@@ -196,6 +336,7 @@ async fn run_jetstream_once(
     stream_name: &str,
     durable_name: &str,
     subjects: &[String],
+    event_codec: EventCodec,
     state: &Arc<RwLock<AppState>>,
 ) -> Result<()> {
     let client = async_nats::connect(url.to_string()).await?;
@@ -234,7 +375,7 @@ async fn run_jetstream_once(
     let mut messages = consumer.messages().await?;
     while let Some(message) = messages.next().await {
         let message = message?;
-        match serde_json::from_slice::<EventEnvelope>(message.payload.as_ref()) {
+        match decode_event_envelope(message.payload.as_ref(), event_codec) {
             Ok(mut event) => {
                 stamp_ingested_event(&mut event, Some(stream_name), Some(&filter_subject));
                 apply_event(state, event);
@@ -251,7 +392,10 @@ async fn run_jetstream_once(
                     Some(durable_name),
                     Some(&filter_subject),
                     "error",
-                    format!("failed to decode {stream_name}: {error}"),
+                    format!(
+                        "failed to decode {stream_name} with {:?}: {error}",
+                        event_codec
+                    ),
                     Some("decode"),
                     false,
                     true,
@@ -268,7 +412,12 @@ async fn run_jetstream_once(
     Ok(())
 }
 
-fn spawn_nats_subject(url: String, subject: String, state: Arc<RwLock<AppState>>) -> Result<()> {
+fn spawn_nats_subject(
+    url: String,
+    subject: String,
+    event_codec: EventCodec,
+    state: Arc<RwLock<AppState>>,
+) -> Result<()> {
     thread::Builder::new()
         .name(format!("state-projectiond-nats-{subject}"))
         .spawn(move || {
@@ -315,8 +464,9 @@ fn spawn_nats_subject(url: String, subject: String, state: Arc<RwLock<AppState>>
                                     0,
                                 );
                                 while let Some(message) = subscriber.next().await {
-                                    match serde_json::from_slice::<EventEnvelope>(
+                                    match decode_event_envelope(
                                         message.payload.as_ref(),
+                                        event_codec,
                                     ) {
                                         Ok(mut event) => {
                                             stamp_ingested_event(&mut event, None, Some(&subject));
@@ -329,7 +479,10 @@ fn spawn_nats_subject(url: String, subject: String, state: Arc<RwLock<AppState>>
                                             None,
                                             Some(&subject),
                                             "error",
-                                            format!("failed to decode {subject}: {error}"),
+                                            format!(
+                                                "failed to decode {subject} with {:?}: {error}",
+                                                event_codec
+                                            ),
                                             Some("decode"),
                                             false,
                                             true,
@@ -465,7 +618,16 @@ fn serve_projection(
     eprintln!("state-projectiond listening on {addr}");
     for stream in listener.incoming() {
         let stream = stream.context("failed to accept state-projectiond client")?;
-        handle_client(stream, state.clone(), schema_version.clone())?;
+        let state = state.clone();
+        let schema_version = schema_version.clone();
+        thread::Builder::new()
+            .name("state-projectiond-client".to_string())
+            .spawn(move || {
+                if let Err(error) = handle_client(stream, state, schema_version) {
+                    eprintln!("state-projectiond client error: {error}");
+                }
+            })
+            .context("failed to spawn state-projectiond client thread")?;
     }
     Ok(())
 }

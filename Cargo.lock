@@ -2062,9 +2062,12 @@ dependencies = [
 name = "trade-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "prost",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "trade-contracts",
 ]
 
 [[package]]
@@ -2079,14 +2082,12 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
- "prost",
  "ratatui",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "trade-contracts",
  "trade-core",
 ]
 

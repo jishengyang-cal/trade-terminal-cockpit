@@ -7,11 +7,13 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use trade_core::events::{CommandAuditRecorded, CommandAuthorityDecided};
 use trade_core::{CommandEnvelope, CommandPayload, DangerLevel, DomainEvent, EventEnvelope};
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser)]
 #[command(name = "command-gateway")]
 #[command(about = "Validate, audit, and optionally dispatch trading command envelopes")]
 struct Cli {
@@ -60,6 +62,9 @@ struct Cli {
 
     #[arg(long, value_name = "PATH")]
     alert_service_bin: Option<PathBuf>,
+
+    #[arg(long, default_value_t = 750)]
+    adapter_timeout_ms: u64,
 }
 
 fn main() -> Result<()> {
@@ -74,6 +79,12 @@ fn main() -> Result<()> {
     let command = read_command(command_json)?;
     process_command(command, &cli)?;
     Ok(())
+}
+
+impl Cli {
+    fn adapter_timeout(&self) -> Duration {
+        Duration::from_millis(self.adapter_timeout_ms.max(1))
+    }
 }
 
 fn process_command(command: CommandEnvelope, cli: &Cli) -> Result<GatewayResponse> {
@@ -188,7 +199,15 @@ fn serve_gateway(addr: &str, cli: &Cli) -> Result<()> {
     eprintln!("command-gateway listening on {addr}");
     for stream in listener.incoming() {
         let stream = stream.context("failed to accept command-gateway client")?;
-        handle_gateway_client(stream, cli)?;
+        let cli = cli.clone();
+        thread::Builder::new()
+            .name("command-gateway-client".to_string())
+            .spawn(move || {
+                if let Err(error) = handle_gateway_client(stream, &cli) {
+                    eprintln!("command-gateway client error: {error}");
+                }
+            })
+            .context("failed to spawn command-gateway client thread")?;
     }
     Ok(())
 }
@@ -304,7 +323,7 @@ fn dispatch_command(
     accepted_reason: &str,
 ) -> Result<(String, String)> {
     if let Some(path) = adapter_for_command(command, cli) {
-        return run_external_dispatch_adapter(path, command);
+        return run_external_dispatch_adapter(path, command, cli.adapter_timeout());
     }
     if cli.execute_broker_control {
         return dispatch_broker_control(command, cli);
@@ -336,7 +355,12 @@ fn apply_external_risk_check(
     let Some(path) = cli.risk_check_bin.as_ref() else {
         return Ok(decision);
     };
-    let output = run_json_adapter(path, command, &["--check-command-risk"])?;
+    let output = run_json_adapter(
+        path,
+        command,
+        &["--check-command-risk"],
+        cli.adapter_timeout(),
+    )?;
     let Some(response) = output else {
         return Ok(decision);
     };
@@ -376,8 +400,9 @@ fn apply_external_risk_check(
 fn run_external_dispatch_adapter(
     path: &PathBuf,
     command: &CommandEnvelope,
+    timeout: Duration,
 ) -> Result<(String, String)> {
-    let output = run_json_adapter(path, command, &["--execute-command"])?;
+    let output = run_json_adapter(path, command, &["--execute-command"], timeout)?;
     let Some(response) = output else {
         return Ok((
             "dispatched".to_string(),
@@ -396,6 +421,7 @@ fn run_json_adapter(
     path: &PathBuf,
     command: &CommandEnvelope,
     args: &[&str],
+    timeout: Duration,
 ) -> Result<Option<ExternalAdapterResponse>> {
     let mut process = Command::new(path)
         .args(args)
@@ -405,13 +431,17 @@ fn run_json_adapter(
         .spawn()
         .with_context(|| format!("failed to launch external adapter {}", path.display()))?;
     {
-        let stdin = process
+        let mut stdin = process
             .stdin
-            .as_mut()
+            .take()
             .context("external adapter stdin unavailable")?;
         writeln!(stdin, "{}", serde_json::to_string(command)?)?;
     }
-    let output = process.wait_with_output()?;
+    let output = wait_with_timeout(
+        process,
+        timeout,
+        &format!("external adapter {}", path.display()),
+    )?;
     if !output.status.success() {
         anyhow::bail!(
             "external adapter {} failed: exit={} stderr={}",
@@ -435,6 +465,33 @@ fn run_json_adapter(
         )
     })?;
     Ok(Some(response))
+}
+
+fn wait_with_timeout(mut process: Child, timeout: Duration, label: &str) -> Result<Output> {
+    let start = Instant::now();
+    loop {
+        if process
+            .try_wait()
+            .with_context(|| format!("failed to poll {label}"))?
+            .is_some()
+        {
+            return process
+                .wait_with_output()
+                .with_context(|| format!("failed to collect {label} output"));
+        }
+        if start.elapsed() >= timeout {
+            let _ = process.kill();
+            let output = process
+                .wait_with_output()
+                .with_context(|| format!("failed to collect timed out {label} output"))?;
+            anyhow::bail!(
+                "{label} timed out after {}ms stderr={}",
+                timeout.as_millis(),
+                compact_process_text(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
 }
 
 fn dispatch_broker_control(command: &CommandEnvelope, cli: &Cli) -> Result<(String, String)> {
@@ -476,14 +533,20 @@ fn dispatch_broker_control(command: &CommandEnvelope, cli: &Cli) -> Result<(Stri
         .arg("--generation")
         .arg(generation.to_string())
         .arg("--request-id")
-        .arg(&command.command_id);
+        .arg(&command.command_id)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-    let output = match process.output() {
+    let output = match process.spawn() {
+        Ok(process) => wait_with_timeout(process, cli.adapter_timeout(), "broker-control-gateway"),
+        Err(error) => Err(error).context("failed to launch broker-control-gateway"),
+    };
+    let output = match output {
         Ok(output) => output,
         Err(error) => {
             return Ok((
                 "execution_failed".to_string(),
-                format!("failed to launch broker-control-gateway: {error}"),
+                format!("broker-control runtime plan failed: {error}"),
             ));
         }
     };

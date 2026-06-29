@@ -1,7 +1,6 @@
 mod app;
 mod cli;
 mod command_client;
-mod event_codec;
 mod event_stream;
 mod input;
 mod observability;

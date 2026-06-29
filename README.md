@@ -257,12 +257,26 @@ cargo run -p trade-tui -- \
 The adapter is invoked with `--query-events`, receives a JSON request on stdin,
 and must emit `EventEnvelope` JSONL on stdout. This keeps database/event-store
 client code out of the TUI.
+`state-projectiond` supports the same adapter as a startup catch-up source, then
+continues with NATS/JetStream live ingest when configured. This keeps the
+projection daemon on the trading-domain boundary without linking database
+drivers into the terminal cockpit. The startup adapter is bounded by
+`--event-store-timeout-ms`; live NATS/JetStream ingest does not wait on it after
+startup.
 
 Projection and command boundary services:
 
 ```bash
 cargo run -p state-projectiond -- \
   --event-jsonl fixtures/order_lifecycle_events.jsonl
+
+cargo run -p state-projectiond -- \
+  --event-store-query-bin /path/to/event-store-query \
+  --event-store-uri postgres://redacted/event_store \
+  --event-store-timeout-ms 5000 \
+  --nats-url nats://127.0.0.1:4222 \
+  --nats-subject 'trading.>' \
+  --event-codec protobuf
 
 cargo run -p state-projectiond -- \
   --event-jsonl fixtures/order_lifecycle_events.jsonl \
@@ -285,6 +299,7 @@ cargo run -p command-gateway -- \
 cargo run -p command-gateway -- \
   --serve 127.0.0.1:39732 \
   --audit-jsonl /tmp/trade-command-audit.jsonl \
+  --adapter-timeout-ms 750 \
   --risk-check-bin /path/to/risk-check \
   --strategy-control-bin /path/to/strategy-control \
   --order-gateway-bin /path/to/order-gateway \
@@ -319,6 +334,8 @@ adapter receives the command envelope on stdin with `--check-command-risk` and
 can return `accepted`, `rejected`, or another authority status with reason codes
 and policy ids. Strategy, order, and alert adapters receive the envelope with
 `--execute-command` and return a dispatch status/reason.
+External adapter execution is bounded by `--adapter-timeout-ms` so a slow
+broker/risk/strategy process cannot stall the gateway control path.
 
 With `--execute-broker-control`, the gateway can dispatch semantically exact
 runtime controls to an external `broker-control-gateway`:

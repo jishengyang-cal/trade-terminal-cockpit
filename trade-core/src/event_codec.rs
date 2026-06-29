@@ -1,9 +1,9 @@
+use crate::events::{self as domain, DomainEvent, EventEnvelope};
+use crate::types::{Money, Price};
 use anyhow::{Context, Result};
 use prost::Message;
 use std::str::FromStr;
 use trade_contracts::trading::v1 as pb;
-use trade_core::events as domain;
-use trade_core::{DomainEvent, EventEnvelope, Money, Price};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EventCodec {
