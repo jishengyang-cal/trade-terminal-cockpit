@@ -15,18 +15,12 @@ cat <<EOF
 config:
   ${CONFIG_DIR}/external.env
 
-User services are managed by the Imperativ target-runtime registry. This helper
-only prepares the local editable profile; it does not install, reload, start, or
-stop systemd units.
+This helper only prepares the local editable profile. Service installation,
+reload, start, stop, restart policy, and boot-time activation belong to the
+trading-machine deployment process, not this terminal cockpit repository.
 
 Run preflight first:
   tools/check_external_integration.py --env-file "${CONFIG_DIR}/external.env"
 
-Then inspect and plan through:
-  cd "${HOME}/projects/imperativ-main"
-  python3 tools/target_machine_runtime_control.py validate --json
-  python3 tools/target_machine_runtime_control.py status service.trade_terminal_cockpit.projectiond --json
-  python3 tools/target_machine_runtime_control.py status service.trade_terminal_cockpit.command_gateway --json
-  python3 tools/target_machine_runtime_control.py plan service.trade_terminal_cockpit.projectiond start --json
-  python3 tools/target_machine_runtime_control.py plan service.trade_terminal_cockpit.command_gateway start --json
+Then use the trading-machine deployment process for any service mutation.
 EOF

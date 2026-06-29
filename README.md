@@ -229,22 +229,9 @@ Open the local TUI against the external profile:
 tools/open_external_tui.sh
 ```
 
-The local user services are managed by the Imperativ target-runtime registry,
-not by ad hoc shell commands. Inspect and plan through
-`$HOME/projects/imperativ-main`:
-
-```bash
-cd "$HOME/projects/imperativ-main"
-python3 tools/target_machine_runtime_control.py validate --json
-python3 tools/target_machine_runtime_control.py status service.trade_terminal_cockpit.projectiond --json
-python3 tools/target_machine_runtime_control.py status service.trade_terminal_cockpit.command_gateway --json
-python3 tools/target_machine_runtime_control.py plan service.trade_terminal_cockpit.projectiond start --json
-python3 tools/target_machine_runtime_control.py plan service.trade_terminal_cockpit.command_gateway start --json
-```
-
-The printed shell commands are evidence for the CommandGateway handoff, not
-permission to run `systemctl` directly. Mutating actions must go through the
-Imperativ Workbench/control-plane approval path.
+Service deployment is intentionally outside this repository. This repo may ship
+unit templates and local launchers, but the trading-machine deployment process
+owns installation, start/stop policy, restart policy, and boot-time activation.
 
 Run a non-broker end-to-end verification:
 
