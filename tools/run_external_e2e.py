@@ -127,6 +127,7 @@ def stream_info(nats_url: str, stream: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run external NATS/projection/gateway E2E without broker execution")
     parser.add_argument("--env-file", type=Path, default=Path.home() / ".config/trade-terminal-cockpit/external.env")
+    parser.add_argument("--event-codec", choices=["json", "protobuf"], default="json")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -164,7 +165,7 @@ def main() -> int:
                 "--nats-subject",
                 event_subject,
                 "--event-codec",
-                "json",
+                args.event_codec,
             ],
             env,
         )
@@ -179,6 +180,8 @@ def main() -> int:
                 str(args.env_file),
                 "--event-jsonl",
                 str(ROOT / "fixtures/order_lifecycle_events.jsonl"),
+                "--codec",
+                args.event_codec,
                 "--rewrite-run-id",
                 run_id,
                 "--json",

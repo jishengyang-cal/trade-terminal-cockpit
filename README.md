@@ -237,14 +237,19 @@ Run a non-broker end-to-end verification:
 ```bash
 tools/run_external_e2e.py \
   --env-file "$XDG_CONFIG_HOME/trade-terminal-cockpit/external.env"
+
+tools/run_external_e2e.py \
+  --env-file "$XDG_CONFIG_HOME/trade-terminal-cockpit/external.env" \
+  --event-codec protobuf
 ```
 
 The E2E creates/updates the trading streams, publishes a synthetic order
-lifecycle into `TRADING_EVENTS`, verifies `state-projectiond` can reconstruct a
-filled order chain, sends a low-risk `AcknowledgeAlertRequested` command through
-`command-gateway` and the risk adapter, verifies a dangerous command is rejected,
-and forwards command audit JSONL into `TRADING_AUDIT`. It does not execute
-broker-control, cancel, flatten, or kill actions.
+lifecycle into `TRADING_EVENTS` as JSON or protobuf `EventEnvelope` wire bytes,
+verifies `state-projectiond` can reconstruct a filled order chain, sends a
+low-risk `AcknowledgeAlertRequested` command through `command-gateway` and the
+risk adapter, verifies a dangerous command is rejected, and forwards command
+audit JSONL into `TRADING_AUDIT`. It does not execute broker-control, cancel,
+flatten, or kill actions.
 
 `trade-terminal-cockpit-command-gateway.service` does not enable broker-control
 execution by default. Set `TRADE_COCKPIT_ENABLE_BROKER_CONTROL=1` only when the

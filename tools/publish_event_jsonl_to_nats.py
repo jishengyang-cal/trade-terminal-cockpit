@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 
+from protobuf_event_codec import encode_event_envelope
 from trade_nats_lite import NatsLite, env_value, load_env_file
 
 
@@ -60,6 +61,7 @@ def main() -> int:
     parser.add_argument("--event-jsonl", type=Path, required=True)
     parser.add_argument("--stream")
     parser.add_argument("--subject")
+    parser.add_argument("--codec", choices=["json", "protobuf"], default="json")
     parser.add_argument("--rewrite-run-id", default="")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -78,7 +80,10 @@ def main() -> int:
                 continue
             event = json.loads(line)
             event = rewrite_event(event, args.rewrite_run_id, stream, subject, environment)
-            body = json.dumps(event, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            if args.codec == "protobuf":
+                body = encode_event_envelope(event)
+            else:
+                body = json.dumps(event, sort_keys=True, separators=(",", ":")).encode("utf-8")
             response = nc.request(event["subject"], body)
             error = response.get("error") if isinstance(response, dict) else None
             if error:
