@@ -1,0 +1,31 @@
+[Unit]
+Description=trade-terminal-cockpit command gateway boundary
+Documentation=file:%h/projects/trading/repos/services/trade-terminal-cockpit/README.md
+After=network-online.target
+Wants=network-online.target
+PartOf=trading-ui.target
+ConditionPathExists=%h/projects/trading/repos/services/trade-terminal-cockpit/.run/bin/command-gateway
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/trading/repos/services/trade-terminal-cockpit
+EnvironmentFile=-%E/trade-terminal-cockpit/external.env
+ExecStartPre=/bin/bash -lc 'tools/check_external_integration.py --env-file "${XDG_CONFIG_HOME:-$HOME/.config}/trade-terminal-cockpit/external.env"'
+ExecStart=/bin/bash -lc 'set -euo pipefail; args=("${TRADE_COCKPIT_COMMAND_GATEWAY_BIN:-.run/bin/command-gateway}" --serve "${TRADE_COCKPIT_COMMAND_GATEWAY_ADDR:-127.0.0.1:39732}" --audit-jsonl "${TRADE_COCKPIT_COMMAND_AUDIT_JSONL:-.run/command-gateway-audit.jsonl}" --adapter-timeout-ms "${TRADE_COCKPIT_ADAPTER_TIMEOUT_MS:-750}"); if [[ -n "${TRADE_COCKPIT_POLICY_JSON:-}" ]]; then args+=(--policy-json "$TRADE_COCKPIT_POLICY_JSON"); fi; if [[ -n "${TRADE_COCKPIT_RISK_CHECK_BIN:-}" ]]; then args+=(--risk-check-bin "$TRADE_COCKPIT_RISK_CHECK_BIN"); fi; if [[ -n "${TRADE_COCKPIT_STRATEGY_CONTROL_BIN:-}" ]]; then args+=(--strategy-control-bin "$TRADE_COCKPIT_STRATEGY_CONTROL_BIN"); fi; if [[ -n "${TRADE_COCKPIT_ORDER_GATEWAY_BIN:-}" ]]; then args+=(--order-gateway-bin "$TRADE_COCKPIT_ORDER_GATEWAY_BIN"); fi; if [[ -n "${TRADE_COCKPIT_ALERT_SERVICE_BIN:-}" ]]; then args+=(--alert-service-bin "$TRADE_COCKPIT_ALERT_SERVICE_BIN"); fi; if [[ "${TRADE_COCKPIT_ENABLE_BROKER_CONTROL:-0}" == "1" ]]; then args+=(--execute-broker-control); if [[ -n "${TRADE_COCKPIT_BROKER_RUNTIME_DIR:-}" ]]; then args+=(--broker-runtime-dir "$TRADE_COCKPIT_BROKER_RUNTIME_DIR"); fi; if [[ -n "${TRADE_COCKPIT_BROKER_CONTROL_BIN:-}" ]]; then args+=(--broker-control-bin "$TRADE_COCKPIT_BROKER_CONTROL_BIN"); fi; IFS=, read -ra slots <<< "${TRADE_COCKPIT_BROKER_ACCOUNT_SLOTS:-}"; for slot in "${slots[@]}"; do [[ -n "$slot" ]] && args+=(--broker-account-slot "$slot"); done; fi; exec "${args[@]}"'
+Restart=on-failure
+RestartSec=1
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/projects/trading/repos/services/trade-terminal-cockpit/.run %E/trade-terminal-cockpit %t
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=trading-ui.target

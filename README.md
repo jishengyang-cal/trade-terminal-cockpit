@@ -180,6 +180,54 @@ default frontend path and it is not a Google VM deployment path:
 tools/tailnet_cockpit_url.sh
 ```
 
+## External Production Boundaries
+
+The cockpit has a production profile, but it refuses to treat the phase-1 OPS
+control-bus as trading-domain truth. `OPS_EVENTS` / `ops.event.>` is for
+systemd/Docker/runtime health. Order lifecycle, strategy, risk, account, and
+audit projections must come from a trading-domain stream such as
+`TRADING_EVENTS` with subjects like `trading.>`.
+
+Install the local user-unit templates and create the editable profile:
+
+```bash
+tools/install_local_systemd.sh
+```
+
+Then edit:
+
+```text
+$XDG_CONFIG_HOME/trade-terminal-cockpit/external.env
+```
+
+Before starting services, run the preflight. It checks that the configured NATS
+JetStream stream exists, that it is not an OPS/control-bus stream, and that
+configured risk/broker/order adapters are present:
+
+```bash
+tools/check_external_integration.py \
+  --env-file "$XDG_CONFIG_HOME/trade-terminal-cockpit/external.env"
+```
+
+Open the local TUI against the external profile:
+
+```bash
+tools/open_external_tui.sh
+```
+
+Start the boundary services only after preflight is green:
+
+```bash
+systemctl --user start trade-terminal-cockpit-state-projectiond.service
+systemctl --user start trade-terminal-cockpit-command-gateway.service
+```
+
+`trade-terminal-cockpit-command-gateway.service` does not enable broker-control
+execution by default. Set `TRADE_COCKPIT_ENABLE_BROKER_CONTROL=1` only when the
+broker runtime, account-slot mapping, operator policy, and risk adapter are all
+intentionally live. Dangerous commands still require exact confirmation in the
+TUI/CLI and policy acceptance in `command-gateway`.
+
 ## Development
 
 Run Rust builds, tests, and smoke checks on the Google VM, not on the local
