@@ -184,9 +184,11 @@ tools/tailnet_cockpit_url.sh
 
 The cockpit has a production profile, but it refuses to treat the phase-1 OPS
 control-bus as trading-domain truth. `OPS_EVENTS` / `ops.event.>` is for
-systemd/Docker/runtime health. Order lifecycle, strategy, risk, account, and
-audit projections must come from a trading-domain stream such as
-`TRADING_EVENTS` with subjects like `trading.>`.
+systemd/Docker/runtime health. Order lifecycle, strategy, risk, and account
+projections must come from a trading-domain stream such as `TRADING_EVENTS`
+with subjects like `trading.event.>`. Command authority/audit events belong in
+`TRADING_AUDIT` on `trading.command.>` / `trading.audit.>`, so the two streams
+do not overlap.
 
 Install the local user-unit templates and create the editable profile:
 
@@ -209,6 +211,14 @@ tools/check_external_integration.py \
   --env-file "$XDG_CONFIG_HOME/trade-terminal-cockpit/external.env"
 ```
 
+If the trading streams do not exist yet, initialize the non-overlapping stream
+surface first:
+
+```bash
+tools/init_trading_streams.py \
+  --env-file "$XDG_CONFIG_HOME/trade-terminal-cockpit/external.env"
+```
+
 Open the local TUI against the external profile:
 
 ```bash
@@ -221,6 +231,20 @@ Start the boundary services only after preflight is green:
 systemctl --user start trade-terminal-cockpit-state-projectiond.service
 systemctl --user start trade-terminal-cockpit-command-gateway.service
 ```
+
+Run a non-broker end-to-end verification:
+
+```bash
+tools/run_external_e2e.py \
+  --env-file "$XDG_CONFIG_HOME/trade-terminal-cockpit/external.env"
+```
+
+The E2E creates/updates the trading streams, publishes a synthetic order
+lifecycle into `TRADING_EVENTS`, verifies `state-projectiond` can reconstruct a
+filled order chain, sends a low-risk `AcknowledgeAlertRequested` command through
+`command-gateway` and the risk adapter, verifies a dangerous command is rejected,
+and forwards command audit JSONL into `TRADING_AUDIT`. It does not execute
+broker-control, cancel, flatten, or kill actions.
 
 `trade-terminal-cockpit-command-gateway.service` does not enable broker-control
 execution by default. Set `TRADE_COCKPIT_ENABLE_BROKER_CONTROL=1` only when the

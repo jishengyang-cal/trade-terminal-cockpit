@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import socket
+import subprocess
 import sys
 import time
 import uuid
@@ -207,6 +208,30 @@ def check_path(name: str, path_text: str, required: bool) -> Check:
     return Check(name, True, redact_home(path))
 
 
+def check_adapter_probe(name: str, path_text: str, enabled: bool) -> Check:
+    if not path_text:
+        return Check(name, True, "not configured")
+    if not enabled:
+        return Check(name, True, "probe skipped")
+    path = Path(path_text)
+    try:
+        completed = subprocess.run(
+            [str(path), "--adapter-probe"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=3,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - preflight should report all failures.
+        return Check(name, False, f"{type(exc).__name__}: {exc}")
+    if completed.returncode != 0:
+        stderr = " ".join(completed.stderr.split())[:240]
+        stdout = " ".join(completed.stdout.split())[:240]
+        return Check(name, False, stderr or stdout or f"exit={completed.returncode}")
+    return Check(name, True, "adapter probe ok")
+
+
 def redact_home(path: Path) -> str:
     home = Path.home()
     try:
@@ -275,12 +300,14 @@ def run_checks(values: dict[str, str]) -> tuple[list[Check], dict]:
     except Exception as exc:  # noqa: BLE001 - preflight must report all local checks.
         checks.append(Check("nats_connect", False, f"{type(exc).__name__}: {exc}"))
 
+    risk_check_bin = env_value(values, "TRADE_COCKPIT_RISK_CHECK_BIN")
     checks.extend(
         [
             check_path("trade_tui_bin", env_value(values, "TRADE_TUI_BIN", ".run/bin/trade-tui"), True),
             check_path("state_projectiond_bin", env_value(values, "TRADE_COCKPIT_STATE_PROJECTIOND_BIN", ".run/bin/state-projectiond"), True),
             check_path("command_gateway_bin", env_value(values, "TRADE_COCKPIT_COMMAND_GATEWAY_BIN", ".run/bin/command-gateway"), True),
-            check_path("risk_check_bin", env_value(values, "TRADE_COCKPIT_RISK_CHECK_BIN"), False),
+            check_path("risk_check_bin", risk_check_bin, False),
+            check_adapter_probe("risk_check_adapter_probe", risk_check_bin, bool(risk_check_bin)),
             check_path("strategy_control_bin", env_value(values, "TRADE_COCKPIT_STRATEGY_CONTROL_BIN"), False),
             check_path("order_gateway_bin", env_value(values, "TRADE_COCKPIT_ORDER_GATEWAY_BIN"), False),
             check_path("alert_service_bin", env_value(values, "TRADE_COCKPIT_ALERT_SERVICE_BIN"), False),
