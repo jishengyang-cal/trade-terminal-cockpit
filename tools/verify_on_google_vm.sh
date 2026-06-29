@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VM_HOST="${TRADE_COCKPIT_VM_HOST:-jisheng-yang@100.64.118.52}"
 REMOTE_DIR="${TRADE_COCKPIT_VM_DIR:-/tmp/trade-terminal-cockpit-verify}"
 SSH_TIMEOUT="${TRADE_COCKPIT_SSH_TIMEOUT:-10}"
+SSH_CONFIG_FILE="${TRADE_COCKPIT_SSH_CONFIG_FILE:-/dev/null}"
 SSH_PROXY_COMMAND="${TRADE_COCKPIT_SSH_PROXY_COMMAND:-}"
 VM_TRANSPORT="${TRADE_COCKPIT_VM_TRANSPORT:-ssh}"
 RUST_DOCKER_IMAGE="${TRADE_COCKPIT_VM_RUST_DOCKER_IMAGE:-rust:1.88}"
@@ -26,6 +27,9 @@ Environment:
   TRADE_COCKPIT_VM_HOST     SSH target, default jisheng-yang@100.64.118.52
   TRADE_COCKPIT_VM_DIR      Remote temp dir, default /tmp/trade-terminal-cockpit-verify
   TRADE_COCKPIT_SSH_TIMEOUT SSH connect timeout seconds, default 10
+  TRADE_COCKPIT_SSH_CONFIG_FILE
+                            SSH config file, default /dev/null to avoid host
+                            global config drift during VM verification
   TRADE_COCKPIT_SSH_PROXY_COMMAND
                             Optional ssh ProxyCommand, e.g. tailscale nc %h %p
   TRADE_COCKPIT_VM_TRANSPORT
@@ -59,7 +63,7 @@ done
 
 cd "$ROOT_DIR"
 
-SSH_ARGS=(-o ConnectTimeout="$SSH_TIMEOUT")
+SSH_ARGS=(-F "$SSH_CONFIG_FILE" -o ConnectTimeout="$SSH_TIMEOUT")
 if [[ -n "$SSH_PROXY_COMMAND" ]]; then
   SSH_ARGS+=(-o "ProxyCommand=$SSH_PROXY_COMMAND")
 fi

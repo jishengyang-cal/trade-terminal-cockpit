@@ -2,30 +2,31 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-USER_SYSTEMD_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/trade-terminal-cockpit"
 
-mkdir -p "${USER_SYSTEMD_DIR}" "${CONFIG_DIR}"
+mkdir -p "${CONFIG_DIR}"
 
 if [ ! -f "${CONFIG_DIR}/external.env" ]; then
   cp "${ROOT_DIR}/config/external.env.example" "${CONFIG_DIR}/external.env"
   printf 'created_config=%s\n' "${CONFIG_DIR}/external.env"
 fi
 
-ln -sf "${ROOT_DIR}/systemd/user/trade-terminal-cockpit-state-projectiond.service" \
-  "${USER_SYSTEMD_DIR}/trade-terminal-cockpit-state-projectiond.service"
-ln -sf "${ROOT_DIR}/systemd/user/trade-terminal-cockpit-command-gateway.service" \
-  "${USER_SYSTEMD_DIR}/trade-terminal-cockpit-command-gateway.service"
-
-systemctl --user daemon-reload
-
 cat <<EOF
-installed_units:
-  trade-terminal-cockpit-state-projectiond.service
-  trade-terminal-cockpit-command-gateway.service
 config:
   ${CONFIG_DIR}/external.env
 
-These units are installed but not started. Run preflight first:
+User services are managed by the Imperativ target-runtime registry. This helper
+only prepares the local editable profile; it does not install, reload, start, or
+stop systemd units.
+
+Run preflight first:
   tools/check_external_integration.py --env-file "${CONFIG_DIR}/external.env"
+
+Then inspect and plan through:
+  cd "${HOME}/projects/imperativ-main"
+  python3 tools/target_machine_runtime_control.py validate --json
+  python3 tools/target_machine_runtime_control.py status service.trade_terminal_cockpit.projectiond --json
+  python3 tools/target_machine_runtime_control.py status service.trade_terminal_cockpit.command_gateway --json
+  python3 tools/target_machine_runtime_control.py plan service.trade_terminal_cockpit.projectiond start --json
+  python3 tools/target_machine_runtime_control.py plan service.trade_terminal_cockpit.command_gateway start --json
 EOF
