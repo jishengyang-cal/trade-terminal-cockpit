@@ -13,24 +13,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-
-CONTROL_BUS_STREAM_PREFIXES = ("OPS_",)
-FORBIDDEN_TRADING_SUBJECT_PREFIXES = (
-    "ops.",
-    "control.",
-    "hot.runtime.",
-    "hfmkt.",
-    "hfxuni.",
-    "market.raw.",
-    "marketdata.raw.",
-    "news.raw.",
-    "raw.",
-    "broker.order.command.",
-    "risk.command.",
-    "account.command.",
+from nats_boundaries import (
+    stream_subjects_are_command_audit,
+    stream_subjects_are_events,
+    subject_compatible,
+    validate_audit_stream_boundary,
+    validate_event_stream_boundary,
+    validate_non_overlapping_streams,
 )
-FORBIDDEN_TRADING_SUBJECTS = (">", "trading.>")
-REQUIRED_EVENT_SUBJECT_PREFIX = "trading.event."
 
 
 @dataclass(frozen=True)
@@ -186,42 +176,6 @@ def env_value(values: dict[str, str], key: str, default: str = "") -> str:
     return os.path.expanduser(os.path.expandvars(value.strip()))
 
 
-def is_control_bus_stream(stream: str) -> bool:
-    return stream.upper().startswith(CONTROL_BUS_STREAM_PREFIXES)
-
-
-def is_control_bus_subject(subject: str) -> bool:
-    return subject.lower().startswith(("ops.", "control."))
-
-
-def is_forbidden_trading_subject(subject: str) -> bool:
-    normalized = subject.strip().lower()
-    return normalized in FORBIDDEN_TRADING_SUBJECTS or normalized.startswith(FORBIDDEN_TRADING_SUBJECT_PREFIXES)
-
-
-def is_trading_event_subject(subject: str) -> bool:
-    normalized = subject.strip().lower()
-    return normalized == "trading.event.>" or normalized.startswith(REQUIRED_EVENT_SUBJECT_PREFIX)
-
-
-def subject_compatible(config_subjects: list[str], requested: str) -> bool:
-    if not requested:
-        return True
-    if requested in config_subjects:
-        return True
-    requested_root = requested.split(".", 1)[0]
-    for configured in config_subjects:
-        if configured == ">":
-            return True
-        if configured.endswith(".>") and requested.startswith(configured[:-1]):
-            return True
-        if requested.endswith(".>") and configured.startswith(requested[:-1]):
-            return True
-        if configured.split(".", 1)[0] == requested_root:
-            return True
-    return False
-
-
 def check_path(name: str, path_text: str, required: bool) -> Check:
     if not path_text:
         return Check(name, not required, "not configured" if not required else "missing config")
@@ -270,10 +224,68 @@ def stream_names(nc: NatsLite) -> list[str]:
     return list(response.get("streams") or [])
 
 
+def parse_subjects(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def check_stream(
+    nc: NatsLite,
+    *,
+    stream: str,
+    requested_subjects: list[str],
+    names: list[str],
+    stream_check_name: str,
+    subject_check_name: str,
+    subject_shape_check_name: str,
+    subject_shape: str,
+) -> tuple[list[Check], dict]:
+    checks: list[Check] = []
+    summary: dict = {}
+    if stream not in names:
+        checks.append(Check(stream_check_name, False, f"{stream} not found; available={','.join(names) or '-'}"))
+        return checks, summary
+
+    response = nc.request(f"$JS.API.STREAM.INFO.{stream}", {})
+    if response.get("error"):
+        checks.append(Check(stream_check_name, False, str(response["error"])))
+        return checks, summary
+
+    config = response.get("config") if isinstance(response.get("config"), dict) else {}
+    state = response.get("state") if isinstance(response.get("state"), dict) else {}
+    subjects = list(config.get("subjects") or [])
+    summary["subjects"] = subjects
+    summary["messages"] = state.get("messages")
+    summary["last_seq"] = state.get("last_seq")
+    checks.append(
+        Check(
+            stream_check_name,
+            True,
+            f"{stream} messages={state.get('messages', 0)} last_seq={state.get('last_seq', 0)}",
+        )
+    )
+    checks.append(
+        Check(
+            subject_check_name,
+            all(subject_compatible(subjects, subject) for subject in requested_subjects),
+            f"requested={','.join(requested_subjects) or '-'} configured={','.join(subjects) or '-'}",
+        )
+    )
+    if subject_shape == "event":
+        ok = stream_subjects_are_events(subjects)
+        detail = "configured subjects are trading.event.*"
+    else:
+        ok = stream_subjects_are_command_audit(subjects)
+        detail = "configured subjects are trading.command.* / trading.audit.*"
+    checks.append(Check(subject_shape_check_name, ok, detail if ok else f"configured={','.join(subjects) or '-'}"))
+    return checks, summary
+
+
 def run_checks(values: dict[str, str]) -> tuple[list[Check], dict]:
     nats_url = env_value(values, "TRADE_COCKPIT_NATS_URL", "nats://127.0.0.1:14222")
     stream = env_value(values, "TRADE_COCKPIT_JETSTREAM_STREAM", "TRADING_EVENTS")
     subject = env_value(values, "TRADE_COCKPIT_NATS_SUBJECT", "trading.event.>")
+    audit_stream = env_value(values, "TRADE_COCKPIT_AUDIT_STREAM", "TRADING_AUDIT")
+    audit_subjects = parse_subjects(env_value(values, "TRADE_COCKPIT_AUDIT_SUBJECTS", "trading.audit.>,trading.command.>"))
     codec = env_value(values, "TRADE_COCKPIT_EVENT_CODEC", "protobuf")
     enable_broker = env_value(values, "TRADE_COCKPIT_ENABLE_BROKER_CONTROL", "0") == "1"
 
@@ -282,46 +294,47 @@ def run_checks(values: dict[str, str]) -> tuple[list[Check], dict]:
         "nats_url": nats_url,
         "stream": stream,
         "subject": subject,
+        "audit_stream": audit_stream,
+        "audit_subjects": audit_subjects,
         "event_codec": codec,
         "broker_control_enabled": enable_broker,
     }
 
-    if is_control_bus_stream(stream) or is_control_bus_subject(subject) or is_forbidden_trading_subject(subject) or not is_trading_event_subject(subject):
-        checks.append(
-            Check(
-                "domain_stream_boundary",
-                False,
-                "cockpit event projection must use trading.event.* and must not subscribe to ops/control/hot/raw authority namespaces",
-            )
-        )
-    else:
-        checks.append(Check("domain_stream_boundary", True, "trading.event projection stream requested"))
+    event_boundary_ok, event_boundary_detail = validate_event_stream_boundary(stream, subject)
+    checks.append(Check("domain_event_stream_boundary", event_boundary_ok, event_boundary_detail))
+    audit_boundary_ok, audit_boundary_detail = validate_audit_stream_boundary(audit_stream, audit_subjects)
+    checks.append(Check("domain_audit_stream_boundary", audit_boundary_ok, audit_boundary_detail))
+    separated_ok, separated_detail = validate_non_overlapping_streams(stream, subject, audit_stream, audit_subjects)
+    checks.append(Check("domain_stream_separation", separated_ok, separated_detail))
 
     try:
         with NatsLite(nats_url, name="trade-cockpit-preflight") as nc:
             names = stream_names(nc)
             summary["streams"] = names
-            if stream not in names:
-                checks.append(Check("jetstream_stream", False, f"{stream} not found; available={','.join(names) or '-'}"))
-            else:
-                response = nc.request(f"$JS.API.STREAM.INFO.{stream}", {})
-                if response.get("error"):
-                    checks.append(Check("jetstream_stream", False, str(response["error"])))
-                else:
-                    config = response.get("config") if isinstance(response.get("config"), dict) else {}
-                    state = response.get("state") if isinstance(response.get("state"), dict) else {}
-                    subjects = list(config.get("subjects") or [])
-                    summary["stream_subjects"] = subjects
-                    summary["stream_messages"] = state.get("messages")
-                    summary["stream_last_seq"] = state.get("last_seq")
-                    checks.append(Check("jetstream_stream", True, f"{stream} messages={state.get('messages', 0)} last_seq={state.get('last_seq', 0)}"))
-                    checks.append(
-                        Check(
-                            "jetstream_subject",
-                            subject_compatible(subjects, subject),
-                            f"requested={subject} configured={','.join(subjects) or '-'}",
-                        )
-                    )
+            event_checks, event_summary = check_stream(
+                nc,
+                stream=stream,
+                requested_subjects=[subject],
+                names=names,
+                stream_check_name="jetstream_event_stream",
+                subject_check_name="jetstream_event_subject",
+                subject_shape_check_name="jetstream_event_subject_shape",
+                subject_shape="event",
+            )
+            audit_checks, audit_summary = check_stream(
+                nc,
+                stream=audit_stream,
+                requested_subjects=audit_subjects,
+                names=names,
+                stream_check_name="jetstream_audit_stream",
+                subject_check_name="jetstream_audit_subject",
+                subject_shape_check_name="jetstream_audit_subject_shape",
+                subject_shape="audit",
+            )
+            checks.extend(event_checks)
+            checks.extend(audit_checks)
+            summary["event_stream"] = event_summary
+            summary["audit_stream_info"] = audit_summary
     except Exception as exc:  # noqa: BLE001 - preflight must report all local checks.
         checks.append(Check("nats_connect", False, f"{type(exc).__name__}: {exc}"))
 

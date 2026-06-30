@@ -269,6 +269,8 @@ def main() -> int:
                 env_value(values, "TRADE_COCKPIT_AUDIT_STREAM", "TRADING_AUDIT"),
                 "--subject",
                 "trading.command.>",
+                "--domain",
+                "audit",
                 "--json",
             ],
             env=env,

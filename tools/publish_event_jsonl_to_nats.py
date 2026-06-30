@@ -5,6 +5,12 @@ import argparse
 import json
 from pathlib import Path
 
+from nats_boundaries import (
+    is_command_audit_subject,
+    is_trading_event_subject,
+    validate_audit_stream_boundary,
+    validate_event_stream_boundary,
+)
 from protobuf_event_codec import encode_event_envelope
 from trade_nats_lite import NatsLite, env_value, load_env_file
 
@@ -22,7 +28,7 @@ def subject_for_event(event: dict, default_subject: str) -> str:
 
 def rewrite_event(event: dict, run_id: str, stream: str, subject: str, environment: str) -> dict:
     if not run_id:
-        event.setdefault("stream", stream)
+        event["stream"] = stream
         event.setdefault("subject", subject_for_event(event, subject))
         event.setdefault("environment", environment)
         return event
@@ -55,12 +61,61 @@ def rewrite_event(event: dict, run_id: str, stream: str, subject: str, environme
     return event
 
 
+def parse_subjects(raw: str) -> list[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def infer_domain(domain: str, stream: str, subject: str, audit_stream: str) -> str:
+    if domain != "auto":
+        return domain
+    if stream == audit_stream or is_command_audit_subject(subject):
+        return "audit"
+    return "event"
+
+
+def validate_publish_boundary(
+    *,
+    domain: str,
+    stream: str,
+    subject: str,
+    event_stream: str,
+    audit_stream: str,
+    audit_subjects: list[str],
+) -> None:
+    if domain == "event":
+        if stream == audit_stream:
+            raise ValueError("event payloads must not be published to the audit stream")
+        ok, detail = validate_event_stream_boundary(stream, subject)
+        if not ok:
+            raise ValueError(detail)
+        if not is_trading_event_subject(subject):
+            raise ValueError(f"event subject must be trading.event.*: {subject}")
+        if event_stream and stream != event_stream:
+            raise ValueError(f"event stream mismatch: configured={event_stream} requested={stream}")
+        return
+
+    if domain == "audit":
+        if stream == event_stream:
+            raise ValueError("command/audit payloads must not be published to the event stream")
+        ok, detail = validate_audit_stream_boundary(stream, audit_subjects)
+        if not ok:
+            raise ValueError(detail)
+        if not is_command_audit_subject(subject):
+            raise ValueError(f"audit subject must be trading.command.* or trading.audit.*: {subject}")
+        if stream != audit_stream:
+            raise ValueError(f"audit stream mismatch: configured={audit_stream} requested={stream}")
+        return
+
+    raise ValueError(f"unknown publish domain: {domain}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Publish cockpit EventEnvelope JSONL to NATS")
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--event-jsonl", type=Path, required=True)
     parser.add_argument("--stream")
     parser.add_argument("--subject")
+    parser.add_argument("--domain", choices=["auto", "event", "audit"], default="auto")
     parser.add_argument("--codec", choices=["json", "protobuf"], default="json")
     parser.add_argument("--rewrite-run-id", default="")
     parser.add_argument("--json", action="store_true")
@@ -68,8 +123,12 @@ def main() -> int:
 
     values = load_env_file(args.env_file)
     nats_url = env_value(values, "TRADE_COCKPIT_NATS_URL", "nats://127.0.0.1:14222")
-    stream = args.stream or env_value(values, "TRADE_COCKPIT_JETSTREAM_STREAM", "TRADING_EVENTS")
-    subject = args.subject or env_value(values, "TRADE_COCKPIT_NATS_SUBJECT", "trading.event.>")
+    event_stream = env_value(values, "TRADE_COCKPIT_JETSTREAM_STREAM", "TRADING_EVENTS")
+    event_subject = env_value(values, "TRADE_COCKPIT_NATS_SUBJECT", "trading.event.>")
+    audit_stream = env_value(values, "TRADE_COCKPIT_AUDIT_STREAM", "TRADING_AUDIT")
+    audit_subjects = parse_subjects(env_value(values, "TRADE_COCKPIT_AUDIT_SUBJECTS", "trading.audit.>,trading.command.>"))
+    stream = args.stream or event_stream
+    subject = args.subject or event_subject
     environment = env_value(values, "TRADE_COCKPIT_TARGET_ENVIRONMENT", "paper")
 
     published = []
@@ -80,6 +139,16 @@ def main() -> int:
                 continue
             event = json.loads(line)
             event = rewrite_event(event, args.rewrite_run_id, stream, subject, environment)
+            event_subject_actual = str(event["subject"])
+            domain = infer_domain(args.domain, stream, event_subject_actual, audit_stream)
+            validate_publish_boundary(
+                domain=domain,
+                stream=stream,
+                subject=event_subject_actual,
+                event_stream=event_stream,
+                audit_stream=audit_stream,
+                audit_subjects=audit_subjects,
+            )
             if args.codec == "protobuf":
                 body = encode_event_envelope(event)
             else:

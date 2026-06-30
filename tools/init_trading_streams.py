@@ -5,6 +5,11 @@ import argparse
 import json
 from pathlib import Path
 
+from nats_boundaries import (
+    validate_audit_stream_boundary,
+    validate_event_stream_boundary,
+    validate_non_overlapping_streams,
+)
 from trade_nats_lite import DAY_NS, NatsLite, env_value, load_env_file
 
 
@@ -56,6 +61,22 @@ def main() -> int:
         ).split(",")
         if item.strip()
     ]
+
+    validations = [
+        validate_event_stream_boundary(event_stream, event_subject),
+        validate_audit_stream_boundary(audit_stream, audit_subjects),
+        validate_non_overlapping_streams(event_stream, event_subject, audit_stream, audit_subjects),
+    ]
+    failures = [detail for ok, detail in validations if not ok]
+    if failures:
+        report = {"ok": False, "errors": failures}
+        if args.json:
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print("trading_streams_ok=false")
+            for detail in failures:
+                print(f"fail\tboundary\t{detail}")
+        return 1
 
     specs = [
         stream_config(
