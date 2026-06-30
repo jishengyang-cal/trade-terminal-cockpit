@@ -1,5 +1,7 @@
 /target/
 /.run/
+/.ai/
+/.mcp.json
 /.env
 /.env.*
 *.log
