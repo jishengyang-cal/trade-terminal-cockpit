@@ -272,6 +272,10 @@ struct AuthorityPolicy {
     command_capabilities: BTreeMap<String, String>,
     #[serde(default)]
     sessions: Vec<OperatorSessionPolicy>,
+    #[serde(default)]
+    rules_required: bool,
+    #[serde(default)]
+    rules: Vec<AuthorityRulePolicy>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -285,9 +289,61 @@ struct OperatorSessionPolicy {
     #[serde(default)]
     target_environments: Vec<String>,
     #[serde(default)]
+    accounts: Vec<String>,
+    #[serde(default)]
+    strategies: Vec<String>,
+    #[serde(default)]
+    sources: Vec<String>,
+    #[serde(default)]
+    host_ids: Vec<String>,
+    #[serde(default)]
+    terminal_session_ids: Vec<String>,
+    #[serde(default)]
     allow_dangerous: bool,
     #[serde(default)]
     mfa_verified: bool,
+    #[serde(default)]
+    require_mfa: bool,
+    #[serde(default)]
+    require_mfa_for_dangerous: bool,
+    #[serde(default)]
+    require_approval_for_dangerous: bool,
+    #[serde(default)]
+    approval_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct AuthorityRulePolicy {
+    #[serde(default)]
+    rule_id: String,
+    #[serde(default)]
+    command_types: Vec<String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default)]
+    danger_levels: Vec<DangerLevel>,
+    #[serde(default)]
+    target_environments: Vec<String>,
+    #[serde(default)]
+    aggregate_types: Vec<String>,
+    #[serde(default)]
+    aggregate_ids: Vec<String>,
+    #[serde(default)]
+    account_ids: Vec<String>,
+    #[serde(default)]
+    strategy_ids: Vec<String>,
+    #[serde(default)]
+    sources: Vec<String>,
+    #[serde(default)]
+    required_roles: Vec<String>,
+    #[serde(default)]
+    require_mfa: bool,
+    #[serde(default)]
+    require_approval: bool,
+    #[serde(default)]
+    approval_ids: Vec<String>,
+    #[serde(default)]
+    confirmation_text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -864,12 +920,15 @@ fn decide(
             status: "accepted".to_string(),
             reason: "gateway accepted envelope".to_string(),
             reason_codes: vec!["capability_ok".to_string(), "danger_level_ok".to_string()],
-            matched_policy_ids: vec![
-                "capability.required".to_string(),
-                "danger.controlled".to_string(),
-                policy_id(policy, "operator.session"),
-            ],
-            approved_by: approved_by(policy),
+            matched_policy_ids: accepted_policy_ids(
+                command,
+                policy,
+                &[
+                    "capability.required".to_string(),
+                    "danger.controlled".to_string(),
+                ],
+            ),
+            approved_by: approved_by(command, policy),
         }),
         DangerLevel::Dangerous if dangerous_allowed(command, allow_dangerous, policy) => {
             Ok(AuthorityDecision {
@@ -879,12 +938,15 @@ fn decide(
                     "capability_ok".to_string(),
                     "dangerous_authority_allowed".to_string(),
                 ],
-                matched_policy_ids: vec![
-                    "capability.required".to_string(),
-                    "danger.explicit_allow".to_string(),
-                    policy_id(policy, "operator.session"),
-                ],
-                approved_by: approved_by(policy),
+                matched_policy_ids: accepted_policy_ids(
+                    command,
+                    policy,
+                    &[
+                        "capability.required".to_string(),
+                        "danger.explicit_allow".to_string(),
+                    ],
+                ),
+                approved_by: approved_by(command, policy),
             })
         }
         DangerLevel::Dangerous => Ok(AuthorityDecision {
@@ -990,11 +1052,38 @@ fn policy_rejection_reason(
             command.operator_id, command.session_id, command.target_environment
         ));
     }
-    if command.requires_mfa && !session.mfa_verified {
+    if let Some(reason) = scope_rejection_reason(command, session) {
+        return Some(reason);
+    }
+    if let Some(reason) = source_rejection_reason(command, session) {
+        return Some(reason);
+    }
+    if (session.require_mfa
+        || command.requires_mfa
+        || (command.danger_level == DangerLevel::Dangerous && session.require_mfa_for_dangerous))
+        && !session.mfa_verified
+    {
         return Some(format!(
             "operator {} session {} has no verified MFA for command {}",
             command.operator_id, command.session_id, command.command_id
         ));
+    }
+    if command.danger_level == DangerLevel::Dangerous && session.require_approval_for_dangerous {
+        let Some(approval_id) = command.approval_id.as_deref() else {
+            return Some(format!(
+                "operator {} session {} needs approval for dangerous command {}",
+                command.operator_id, command.session_id, command.command_id
+            ));
+        };
+        if !allowed_string(&session.approval_ids, approval_id) {
+            return Some(format!(
+                "approval {approval_id} is not allowed for operator {} session {}",
+                command.operator_id, command.session_id
+            ));
+        }
+    }
+    if let Some(reason) = rule_rejection_reason(command, policy, session) {
+        return Some(reason);
     }
     None
 }
@@ -1006,6 +1095,200 @@ fn matching_session<'a>(
     policy.sessions.iter().find(|session| {
         session.operator_id == command.operator_id && session.session_id == command.session_id
     })
+}
+
+fn scope_rejection_reason(
+    command: &CommandEnvelope,
+    session: &OperatorSessionPolicy,
+) -> Option<String> {
+    let account_id = command_account_id(command);
+    let strategy_id = command_strategy_id(command);
+    if account_id.is_none() && strategy_id.is_none() {
+        return None;
+    }
+    if !session.accounts.is_empty() {
+        if let Some(account_id) = account_id {
+            if !allowed_account(&session.accounts, account_id) {
+                return Some(format!(
+                    "operator {} session {} cannot target account {}",
+                    command.operator_id, command.session_id, account_id
+                ));
+            }
+        }
+    }
+    if !session.strategies.is_empty() {
+        if let Some(strategy_id) = strategy_id {
+            if !allowed_string(&session.strategies, strategy_id) {
+                return Some(format!(
+                    "operator {} session {} cannot target strategy {}",
+                    command.operator_id, command.session_id, strategy_id
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn source_rejection_reason(
+    command: &CommandEnvelope,
+    session: &OperatorSessionPolicy,
+) -> Option<String> {
+    if !session.sources.is_empty() && !allowed_string(&session.sources, command.source.as_str()) {
+        return Some(format!(
+            "operator {} session {} cannot use source {}",
+            command.operator_id, command.session_id, command.source
+        ));
+    }
+    if !session.host_ids.is_empty() {
+        let Some(host_id) = command.host_id.as_deref() else {
+            return Some(format!(
+                "operator {} session {} requires a host_id",
+                command.operator_id, command.session_id
+            ));
+        };
+        if !allowed_string(&session.host_ids, host_id) {
+            return Some(format!(
+                "operator {} session {} cannot use host {}",
+                command.operator_id, command.session_id, host_id
+            ));
+        }
+    }
+    if !session.terminal_session_ids.is_empty() {
+        let Some(terminal_session_id) = command.terminal_session_id.as_deref() else {
+            return Some(format!(
+                "operator {} session {} requires a terminal_session_id",
+                command.operator_id, command.session_id
+            ));
+        };
+        if !allowed_string(&session.terminal_session_ids, terminal_session_id) {
+            return Some(format!(
+                "operator {} session {} cannot use terminal session {}",
+                command.operator_id, command.session_id, terminal_session_id
+            ));
+        }
+    }
+    None
+}
+
+fn rule_rejection_reason(
+    command: &CommandEnvelope,
+    policy: &AuthorityPolicy,
+    session: &OperatorSessionPolicy,
+) -> Option<String> {
+    if policy.rules.is_empty() {
+        return None;
+    }
+
+    let matching_rules = policy
+        .rules
+        .iter()
+        .filter(|rule| rule_matches_command(rule, command))
+        .collect::<Vec<_>>();
+    if matching_rules.is_empty() {
+        return policy.rules_required.then(|| {
+            format!(
+                "no authority policy rule matched command {} scope {}",
+                command.command_type, command.aggregate_id
+            )
+        });
+    }
+
+    let mut first_rejection = None;
+    for rule in matching_rules {
+        if let Some(reason) = rule_specific_rejection_reason(rule, command, session) {
+            first_rejection.get_or_insert(reason);
+        } else {
+            return None;
+        }
+    }
+
+    first_rejection
+}
+
+fn rule_specific_rejection_reason(
+    rule: &AuthorityRulePolicy,
+    command: &CommandEnvelope,
+    session: &OperatorSessionPolicy,
+) -> Option<String> {
+    if !rule.required_roles.is_empty()
+        && !session
+            .roles
+            .iter()
+            .any(|role| rule.required_roles.iter().any(|required| required == role))
+    {
+        return Some(format!(
+            "operator {} session {} lacks a role required by rule {}",
+            command.operator_id,
+            command.session_id,
+            display_rule_id(rule)
+        ));
+    }
+    if rule.require_mfa && !session.mfa_verified {
+        return Some(format!(
+            "rule {} requires verified MFA for command {}",
+            display_rule_id(rule),
+            command.command_id
+        ));
+    }
+    if rule.require_approval {
+        let Some(approval_id) = command.approval_id.as_deref() else {
+            return Some(format!(
+                "rule {} requires approval for command {}",
+                display_rule_id(rule),
+                command.command_id
+            ));
+        };
+        if !allowed_string(&rule.approval_ids, approval_id) {
+            return Some(format!(
+                "approval {approval_id} is not allowed by rule {}",
+                display_rule_id(rule)
+            ));
+        }
+    }
+    if let Some(expected) = rule.confirmation_text.as_deref() {
+        if command.confirmation_text.as_deref() != Some(expected) {
+            return Some(format!(
+                "rule {} requires exact confirmation text",
+                display_rule_id(rule)
+            ));
+        }
+    }
+    None
+}
+
+fn rule_matches_command(rule: &AuthorityRulePolicy, command: &CommandEnvelope) -> bool {
+    if !allowed_string(&rule.command_types, command.command_type.as_str())
+        || !allowed_string(&rule.capabilities, command.capability.as_str())
+        || !allowed_danger_level(&rule.danger_levels, command.danger_level)
+        || !allowed_string(
+            &rule.target_environments,
+            command.target_environment.as_str(),
+        )
+        || !allowed_string(&rule.aggregate_types, command.aggregate_type.as_str())
+        || !allowed_string(&rule.aggregate_ids, command.aggregate_id.as_str())
+    {
+        return false;
+    }
+    if !rule.account_ids.is_empty() {
+        let Some(account_id) = command_account_id(command) else {
+            return false;
+        };
+        if !allowed_account(&rule.account_ids, account_id) {
+            return false;
+        }
+    }
+    if !rule.strategy_ids.is_empty() {
+        let Some(strategy_id) = command_strategy_id(command) else {
+            return false;
+        };
+        if !allowed_string(&rule.strategy_ids, strategy_id) {
+            return false;
+        }
+    }
+    if !rule.sources.is_empty() && !allowed_string(&rule.sources, command.source.as_str()) {
+        return false;
+    }
+    true
 }
 
 fn dangerous_allowed(
@@ -1022,16 +1305,129 @@ fn dangerous_allowed(
         .unwrap_or(false)
 }
 
+fn allowed_string(allowed: &[String], value: &str) -> bool {
+    allowed.is_empty()
+        || allowed
+            .iter()
+            .any(|candidate| candidate == "*" || candidate == value)
+}
+
+fn allowed_account(allowed: &[String], account_id: &str) -> bool {
+    if allowed.is_empty() || allowed.iter().any(|candidate| candidate == "*") {
+        return true;
+    }
+    if is_global_account_alias(account_id) {
+        return allowed
+            .iter()
+            .any(|candidate| is_global_account_alias(candidate.as_str()));
+    }
+    allowed.iter().any(|candidate| candidate == account_id)
+}
+
+fn allowed_danger_level(allowed: &[DangerLevel], danger_level: DangerLevel) -> bool {
+    allowed.is_empty() || allowed.iter().any(|allowed| *allowed == danger_level)
+}
+
+fn command_account_id(command: &CommandEnvelope) -> Option<&str> {
+    match &command.payload {
+        CommandPayload::CancelOrderRequested { account_id, .. }
+        | CommandPayload::CancelAllOrdersForSymbolRequested { account_id, .. }
+        | CommandPayload::CancelAllOrdersForAccountRequested { account_id }
+        | CommandPayload::FlattenSymbolRequested { account_id, .. }
+        | CommandPayload::FlattenAccountRequested { account_id }
+        | CommandPayload::GlobalKillSwitchRequested { account_id }
+        | CommandPayload::AccountKillSwitchRequested { account_id } => Some(account_id.as_str()),
+        CommandPayload::PauseStrategyRequested { .. }
+        | CommandPayload::ResumeStrategyRequested { .. }
+        | CommandPayload::DrainStrategyRequested { .. }
+        | CommandPayload::KillStrategyRequested { .. }
+        | CommandPayload::AcknowledgeAlertRequested { .. } => None,
+    }
+}
+
+fn command_strategy_id(command: &CommandEnvelope) -> Option<&str> {
+    match &command.payload {
+        CommandPayload::PauseStrategyRequested { strategy_id }
+        | CommandPayload::ResumeStrategyRequested { strategy_id }
+        | CommandPayload::DrainStrategyRequested { strategy_id }
+        | CommandPayload::KillStrategyRequested { strategy_id } => Some(strategy_id.as_str()),
+        CommandPayload::CancelOrderRequested { .. }
+        | CommandPayload::CancelAllOrdersForSymbolRequested { .. }
+        | CommandPayload::CancelAllOrdersForAccountRequested { .. }
+        | CommandPayload::FlattenSymbolRequested { .. }
+        | CommandPayload::FlattenAccountRequested { .. }
+        | CommandPayload::GlobalKillSwitchRequested { .. }
+        | CommandPayload::AccountKillSwitchRequested { .. }
+        | CommandPayload::AcknowledgeAlertRequested { .. } => None,
+    }
+}
+
 fn policy_id(policy: Option<&AuthorityPolicy>, suffix: &str) -> String {
     policy
         .map(|policy| format!("{}:{suffix}", policy.policy_version))
         .unwrap_or_else(|| suffix.to_string())
 }
 
-fn approved_by(policy: Option<&AuthorityPolicy>) -> Vec<String> {
+fn accepted_policy_ids(
+    command: &CommandEnvelope,
+    policy: Option<&AuthorityPolicy>,
+    base: &[String],
+) -> Vec<String> {
+    let mut ids = base.to_vec();
+    ids.push(policy_id(policy, "operator.session"));
+    if let Some(policy) = policy {
+        ids.extend(accepted_rule_ids(command, policy));
+    }
+    ids
+}
+
+fn accepted_rule_ids(command: &CommandEnvelope, policy: &AuthorityPolicy) -> Vec<String> {
+    let Some(session) = matching_session(command, policy) else {
+        return Vec::new();
+    };
     policy
+        .rules
+        .iter()
+        .enumerate()
+        .filter(|(_, rule)| rule_matches_command(rule, command))
+        .filter(|(_, rule)| rule_specific_rejection_reason(rule, command, session).is_none())
+        .map(|(index, rule)| rule_policy_id(policy, rule, index))
+        .collect()
+}
+
+fn rule_policy_id(policy: &AuthorityPolicy, rule: &AuthorityRulePolicy, index: usize) -> String {
+    let suffix = if rule.rule_id.trim().is_empty() {
+        format!("rule.{index}")
+    } else {
+        format!("rule.{}", rule.rule_id)
+    };
+    format!("{}:{suffix}", policy.policy_version)
+}
+
+fn display_rule_id(rule: &AuthorityRulePolicy) -> String {
+    if rule.rule_id.trim().is_empty() {
+        "<unnamed>".to_string()
+    } else {
+        rule.rule_id.clone()
+    }
+}
+
+fn approved_by(command: &CommandEnvelope, policy: Option<&AuthorityPolicy>) -> Vec<String> {
+    let mut approvers = policy
         .map(|policy| vec![format!("command-gateway/{}", policy.policy_version)])
-        .unwrap_or_else(|| vec!["command-gateway".to_string()])
+        .unwrap_or_else(|| vec!["command-gateway".to_string()]);
+    if let Some(approval_id) = command.approval_id.as_deref() {
+        approvers.push(format!("approval/{approval_id}"));
+    }
+    if let Some(policy) = policy {
+        if matching_session(command, policy)
+            .map(|session| session.mfa_verified)
+            .unwrap_or(false)
+        {
+            approvers.push("mfa/session".to_string());
+        }
+    }
+    approvers
 }
 
 fn expected_capability(command_type: &str) -> Option<&'static str> {
@@ -1232,7 +1628,9 @@ mod tests {
                 target_environments: vec!["paper".to_string()],
                 allow_dangerous: false,
                 mfa_verified: false,
+                ..OperatorSessionPolicy::default()
             }],
+            ..AuthorityPolicy::default()
         }
     }
 
@@ -1289,5 +1687,165 @@ mod tests {
         let decision = decide(&command, true, &[], Some(&policy)).expect("decision should succeed");
 
         assert_eq!(decision.status, "rejected");
+    }
+
+    fn scoped_policy() -> AuthorityPolicy {
+        AuthorityPolicy {
+            policy_version: "policy-scoped".to_string(),
+            allow_capabilities: vec![
+                "strategy.control".to_string(),
+                "order.cancel".to_string(),
+                "account.kill".to_string(),
+            ],
+            rules_required: true,
+            sessions: vec![
+                OperatorSessionPolicy {
+                    operator_id: "operator-test".to_string(),
+                    session_id: "session-test".to_string(),
+                    roles: vec!["trader".to_string()],
+                    capabilities: vec!["strategy.control".to_string(), "order.cancel".to_string()],
+                    target_environments: vec!["paper".to_string()],
+                    accounts: vec!["paper-main".to_string()],
+                    strategies: vec!["open-scalp".to_string()],
+                    sources: vec!["trade-tui".to_string(), "tradectl".to_string()],
+                    ..OperatorSessionPolicy::default()
+                },
+                OperatorSessionPolicy {
+                    operator_id: "operator-test".to_string(),
+                    session_id: "incident-session".to_string(),
+                    roles: vec!["incident_commander".to_string()],
+                    capabilities: vec!["account.kill".to_string()],
+                    target_environments: vec!["live".to_string()],
+                    accounts: vec!["global".to_string(), "all".to_string()],
+                    sources: vec!["trade-tui".to_string(), "tradectl".to_string()],
+                    allow_dangerous: true,
+                    mfa_verified: true,
+                    require_mfa_for_dangerous: true,
+                    require_approval_for_dangerous: true,
+                    approval_ids: vec!["approval-live-1".to_string()],
+                    ..OperatorSessionPolicy::default()
+                },
+            ],
+            rules: vec![
+                AuthorityRulePolicy {
+                    rule_id: "paper-strategy-control".to_string(),
+                    command_types: vec!["PauseStrategyRequested".to_string()],
+                    capabilities: vec!["strategy.control".to_string()],
+                    target_environments: vec!["paper".to_string()],
+                    strategy_ids: vec!["open-scalp".to_string()],
+                    required_roles: vec!["trader".to_string()],
+                    ..AuthorityRulePolicy::default()
+                },
+                AuthorityRulePolicy {
+                    rule_id: "paper-order-cancel".to_string(),
+                    command_types: vec!["CancelOrderRequested".to_string()],
+                    capabilities: vec!["order.cancel".to_string()],
+                    target_environments: vec!["paper".to_string()],
+                    account_ids: vec!["paper-main".to_string()],
+                    required_roles: vec!["trader".to_string()],
+                    ..AuthorityRulePolicy::default()
+                },
+                AuthorityRulePolicy {
+                    rule_id: "live-global-kill".to_string(),
+                    command_types: vec!["GlobalKillSwitchRequested".to_string()],
+                    capabilities: vec!["account.kill".to_string()],
+                    danger_levels: vec![DangerLevel::Dangerous],
+                    target_environments: vec!["live".to_string()],
+                    account_ids: vec!["global".to_string(), "all".to_string()],
+                    required_roles: vec!["incident_commander".to_string()],
+                    require_mfa: true,
+                    require_approval: true,
+                    approval_ids: vec!["approval-live-1".to_string()],
+                    ..AuthorityRulePolicy::default()
+                },
+            ],
+            ..AuthorityPolicy::default()
+        }
+    }
+
+    #[test]
+    fn scoped_policy_rejects_account_outside_session_scope() {
+        let mut command = command(
+            CommandPayload::CancelOrderRequested {
+                account_id: "live-main".to_string(),
+                order_id: "order-1".to_string(),
+            },
+            "order.cancel",
+        );
+        command.source = "trade-tui".to_string();
+        let policy = scoped_policy();
+
+        let decision =
+            decide(&command, false, &[], Some(&policy)).expect("decision should succeed");
+
+        assert_eq!(decision.status, "rejected");
+        assert!(decision.reason.contains("cannot target account live-main"));
+    }
+
+    #[test]
+    fn scoped_policy_rejects_strategy_outside_session_scope() {
+        let mut command = command(
+            CommandPayload::PauseStrategyRequested {
+                strategy_id: "unknown-strategy".to_string(),
+            },
+            "strategy.control",
+        );
+        command.source = "trade-tui".to_string();
+        let policy = scoped_policy();
+
+        let decision =
+            decide(&command, false, &[], Some(&policy)).expect("decision should succeed");
+
+        assert_eq!(decision.status, "rejected");
+        assert!(decision
+            .reason
+            .contains("cannot target strategy unknown-strategy"));
+    }
+
+    #[test]
+    fn scoped_policy_rejects_dangerous_without_approval() {
+        let mut command = command(
+            CommandPayload::GlobalKillSwitchRequested {
+                account_id: "global".to_string(),
+            },
+            "account.kill",
+        );
+        command.session_id = "incident-session".to_string();
+        command.target_environment = "live".to_string();
+        command.source = "trade-tui".to_string();
+        command.requested_by_role = Some("incident_commander".to_string());
+        let policy = scoped_policy();
+
+        let decision = decide(&command, true, &[], Some(&policy)).expect("decision should succeed");
+
+        assert_eq!(decision.status, "rejected");
+        assert!(decision.reason.contains("needs approval"));
+    }
+
+    #[test]
+    fn scoped_policy_accepts_dangerous_with_mfa_and_approval() {
+        let mut command = command(
+            CommandPayload::GlobalKillSwitchRequested {
+                account_id: "global".to_string(),
+            },
+            "account.kill",
+        );
+        command.session_id = "incident-session".to_string();
+        command.target_environment = "live".to_string();
+        command.source = "trade-tui".to_string();
+        command.requested_by_role = Some("incident_commander".to_string());
+        command.approval_id = Some("approval-live-1".to_string());
+        let policy = scoped_policy();
+
+        let decision = decide(&command, true, &[], Some(&policy)).expect("decision should succeed");
+
+        assert_eq!(decision.status, "accepted");
+        assert!(decision
+            .matched_policy_ids
+            .contains(&"policy-scoped:rule.live-global-kill".to_string()));
+        assert!(decision
+            .approved_by
+            .contains(&"approval/approval-live-1".to_string()));
+        assert!(decision.approved_by.contains(&"mfa/session".to_string()));
     }
 }

@@ -22,6 +22,7 @@
     "AccountKillSwitchRequested": "account.kill",
     "AcknowledgeAlertRequested": "alert.ack"
   },
+  "rules_required": true,
   "sessions": [
     {
       "operator_id": "operator-example",
@@ -29,6 +30,9 @@
       "roles": ["trader"],
       "capabilities": ["strategy.control", "order.cancel", "alert.ack"],
       "target_environments": ["paper"],
+      "accounts": ["paper-main"],
+      "strategies": ["open-scalp", "orb", "l1-l2-imbalance", "passive-mm"],
+      "sources": ["trade-tui", "tradectl"],
       "allow_dangerous": false,
       "mfa_verified": false
     },
@@ -45,8 +49,79 @@
         "alert.ack"
       ],
       "target_environments": ["paper", "live"],
+      "accounts": ["*", "global", "all"],
+      "strategies": ["*"],
+      "sources": ["trade-tui", "tradectl"],
       "allow_dangerous": true,
-      "mfa_verified": true
+      "mfa_verified": true,
+      "require_mfa_for_dangerous": true,
+      "require_approval_for_dangerous": true,
+      "approval_ids": ["incident-approved"]
+    }
+  ],
+  "rules": [
+    {
+      "rule_id": "paper-strategy-control",
+      "command_types": [
+        "PauseStrategyRequested",
+        "ResumeStrategyRequested",
+        "DrainStrategyRequested"
+      ],
+      "capabilities": ["strategy.control"],
+      "target_environments": ["paper"],
+      "strategy_ids": ["open-scalp", "orb", "l1-l2-imbalance", "passive-mm"],
+      "sources": ["trade-tui", "tradectl"],
+      "required_roles": ["trader", "incident_commander"]
+    },
+    {
+      "rule_id": "paper-order-cancel",
+      "command_types": ["CancelOrderRequested"],
+      "capabilities": ["order.cancel"],
+      "target_environments": ["paper"],
+      "account_ids": ["paper-main"],
+      "sources": ["trade-tui", "tradectl"],
+      "required_roles": ["trader", "incident_commander"]
+    },
+    {
+      "rule_id": "paper-alert-ack",
+      "command_types": ["AcknowledgeAlertRequested"],
+      "capabilities": ["alert.ack"],
+      "target_environments": ["paper"],
+      "sources": ["trade-tui", "tradectl"],
+      "required_roles": ["trader", "incident_commander"]
+    },
+    {
+      "rule_id": "incident-dangerous-strategy-control",
+      "command_types": ["KillStrategyRequested"],
+      "capabilities": ["strategy.control"],
+      "danger_levels": ["dangerous"],
+      "target_environments": ["paper", "live"],
+      "strategy_ids": ["*"],
+      "sources": ["trade-tui", "tradectl"],
+      "required_roles": ["incident_commander"],
+      "require_mfa": true,
+      "require_approval": true,
+      "approval_ids": ["incident-approved"]
+    },
+    {
+      "rule_id": "incident-dangerous-account-control",
+      "command_types": [
+        "CancelAllOrdersForSymbolRequested",
+        "CancelAllOrdersForAccountRequested",
+        "FlattenSymbolRequested",
+        "FlattenAccountRequested",
+        "GlobalKillSwitchRequested",
+        "AccountKillSwitchRequested"
+      ],
+      "capabilities": ["order.cancel_all", "account.flatten", "account.kill"],
+      "danger_levels": ["dangerous"],
+      "target_environments": ["paper", "live"],
+      "account_ids": ["*", "global", "all"],
+      "sources": ["trade-tui", "tradectl"],
+      "required_roles": ["incident_commander"],
+      "require_mfa": true,
+      "require_approval": true,
+      "approval_ids": ["incident-approved"]
     }
   ]
 }
