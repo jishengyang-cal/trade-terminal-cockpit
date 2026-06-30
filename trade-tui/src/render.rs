@@ -5,7 +5,9 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 use std::path::PathBuf;
-use trade_core::state::{AccountView, AppState, EventSummary, OrderChain, StrategyView};
+use trade_core::state::{
+    AccountView, AppState, EventSummary, OrderChain, OrderLifecycleState, StrategyView,
+};
 
 pub fn plain_summary(state: &AppState, replay: bool, filter_summary: Option<&str>) -> String {
     let mut summary = format!(
@@ -124,8 +126,8 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .split(area);
 
     let mut accounts = vec![format!(
-        "  {:<14} {:<6} {:<8} {:<24} {:>9} {:>6} {}",
-        "ACCOUNT", "MODE", "BROKER", "PERMISSIONS", "DAY_PNL", "EXP", "CTRL"
+        "  {:<14} {:<6} {:<8} {:<10} {:<4} {:<5} {:<9} {:>9} {:>6}",
+        "ACCOUNT", "MODE", "BROKER", "TRADE", "DATA", "ORDER", "VALUATION", "DAY_PNL", "EXP"
     )];
     for (index, account) in state.accounts.by_id.values().enumerate() {
         accounts.push(format_account_row(
@@ -186,6 +188,16 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
         kv("acct_type", selected_account.margin_permission_label()),
         kv("broker", &selected_account.broker),
         kv("broker_ok", mark(selected_account.broker_connected)),
+        kv("trade", &selected_account.effective_trade_state),
+        kv(
+            "reason",
+            selected_account
+                .effective_trade_reason
+                .as_deref()
+                .unwrap_or("-"),
+        ),
+        kv("can_submit", mark(selected_account.can_submit_order)),
+        kv("can_cancel", mark(selected_account.can_cancel_order)),
         kv("cash", &selected_account.cash_value.to_string()),
         kv(
             "buy_power",
@@ -199,6 +211,35 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
         ),
         kv("net_liq", &selected_account.net_liquidation.to_string()),
         kv("avail", &selected_account.available_funds.to_string()),
+        kv("valuation", &selected_account.valuation_status),
+        kv(
+            "as_of_seq",
+            &selected_account
+                .account_snapshot_seq
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv(
+            "age_ms",
+            &selected_account
+                .account_snapshot_age_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        kv(
+            "source",
+            selected_account
+                .account_snapshot_source
+                .as_deref()
+                .unwrap_or("-"),
+        ),
+        kv(
+            "val_reason",
+            selected_account
+                .valuation_incomplete_reason
+                .as_deref()
+                .unwrap_or("-"),
+        ),
         kv(
             "maint_mgn",
             &selected_account.maintenance_margin.to_string(),
@@ -424,6 +465,11 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     chain.broker_order_id.as_deref().unwrap_or("-"),
                 ),
                 kv_wide("perm_id", chain.perm_id.as_deref().unwrap_or("-")),
+                kv_wide("order_ref", chain.order_ref.as_deref().unwrap_or("-")),
+                kv_wide(
+                    "strategy_order_ref",
+                    chain.strategy_order_ref.as_deref().unwrap_or("-"),
+                ),
                 kv_wide("symbol", chain.symbol.as_deref().unwrap_or("-")),
                 kv_wide("side", chain.side.as_deref().unwrap_or("-")),
                 kv_wide("order_type", chain.order_type.as_deref().unwrap_or("-")),
@@ -434,11 +480,47 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     "broker_status",
                     chain.broker_status.as_deref().unwrap_or("-"),
                 ),
+                kv_wide(
+                    "total_qty",
+                    &chain
+                        .total_quantity()
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "UNKNOWN".to_string()),
+                ),
                 kv_wide("filled_qty", &chain.filled_quantity.to_string()),
                 kv_wide(
                     "remaining_qty",
                     &chain
                         .remaining_quantity
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "cum_qty_i64",
+                    &chain
+                        .cum_qty_i64
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "leaves_qty_i64",
+                    &chain
+                        .leaves_quantity()
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide("quantity_status", chain.quantity_status()),
+                kv_wide(
+                    "display_qty",
+                    &chain
+                        .display_qty
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "min_qty",
+                    &chain
+                        .min_qty
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "-".to_string()),
                 ),
@@ -503,8 +585,77 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                         .unwrap_or_else(|| "-".to_string()),
                 ),
                 kv_wide("anomalies", &anomalies),
+                kv_wide(
+                    "risk_decision_id",
+                    chain
+                        .risk
+                        .as_ref()
+                        .and_then(|risk| risk.decision_id.as_deref())
+                        .unwrap_or("-"),
+                ),
+                kv_wide(
+                    "risk_result",
+                    chain
+                        .risk
+                        .as_ref()
+                        .map(|risk| if risk.approved { "PASS" } else { "FAIL" })
+                        .unwrap_or("-"),
+                ),
+                kv_wide(
+                    "risk_snapshot_id",
+                    chain
+                        .risk
+                        .as_ref()
+                        .and_then(|risk| risk.risk_snapshot_id.as_deref())
+                        .unwrap_or("-"),
+                ),
+                kv_wide(
+                    "risk_policy_version",
+                    chain
+                        .risk
+                        .as_ref()
+                        .and_then(|risk| risk.authority_policy_version.as_deref())
+                        .unwrap_or("-"),
+                ),
+                kv_wide(
+                    "risk_reason_codes",
+                    &chain
+                        .risk
+                        .as_ref()
+                        .map(|risk| risk.reason_codes.join(","))
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
                 String::new(),
             ];
+            if !chain.fills.is_empty() {
+                lines.push("Fill Detail".to_string());
+                lines.push(format!(
+                    "{:<16} {:>6} {:>12} {:<8} {:<5} {:>10} {}",
+                    "EXEC_ID", "QTY", "PX", "VENUE", "LIQ", "COMM", "TS_NS"
+                ));
+                for fill in &chain.fills {
+                    lines.push(format!(
+                        "{:<16} {:>6} {:>12} {:<8} {:<5} {:>10} {}",
+                        truncate(fill.exec_id.as_deref().unwrap_or("-"), 16),
+                        fill.qty,
+                        truncate(&fill.price.to_string(), 12),
+                        truncate(fill.venue.as_deref().unwrap_or("-"), 8),
+                        truncate(fill.liquidity_flag.as_deref().unwrap_or("-"), 5),
+                        truncate(
+                            &fill
+                                .commission
+                                .as_ref()
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
+                            10
+                        ),
+                        fill.fill_ts_ns
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "-".to_string())
+                    ));
+                }
+                lines.push(String::new());
+            }
             for entry in &chain.timeline {
                 lines.push(format!(
                     "#{:<4} {:<13} {}",
@@ -523,10 +674,22 @@ fn render_positions(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let state = &app.state;
     let selected_account = selected_account(state, app.selected_account_index);
     let mut lines = vec![format!(
-        "{:<14} {:<8} {:>8} {:>10} {:>10} {:>10}  {}",
-        "ACCOUNT", "SYMBOL", "NET_QTY", "AVG_PX", "MKT_PX", "UPNL", "ATTRIBUTION"
+        "{:<14} {:<8} {:>8} {:>8} {:>8} {:>9} {:>10} {:>10} {:>10}  {}",
+        "ACCOUNT",
+        "SYMBOL",
+        "NET_QTY",
+        "OPEN_BUY",
+        "OPEN_SELL",
+        "WORST_QTY",
+        "AVG_PX",
+        "MKT_PX",
+        "UPNL",
+        "ATTRIBUTION"
     )];
     for position in state.positions.by_key.values() {
+        let (open_buy_qty, open_sell_qty) =
+            pending_order_qty(state, &position.account_id, &position.symbol);
+        let worst_qty = position.net_quantity + open_buy_qty - open_sell_qty;
         let attribution = position
             .strategy_attribution
             .iter()
@@ -534,10 +697,13 @@ fn render_positions(frame: &mut Frame<'_>, area: Rect, app: &App) {
             .collect::<Vec<_>>()
             .join(", ");
         lines.push(format!(
-            "{:<14} {:<8} {:>8} {:>10} {:>10} {:>+10.2}  {}",
+            "{:<14} {:<8} {:>8} {:>8} {:>8} {:>9} {:>10} {:>10} {:>+10.2}  {}",
             truncate(&position.account_id, 14),
             position.symbol,
             position.net_quantity,
+            open_buy_qty,
+            open_sell_qty,
+            worst_qty,
             position.average_price.display_value(),
             position.market_price.display_value(),
             position.unrealized_pnl,
@@ -705,6 +871,18 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
         kv_wide("short_label", selected_account.short_permission_label()),
         kv_wide("margin_label", selected_account.margin_permission_label()),
         kv_wide("mutation", selected_account.mutation_permission_label()),
+        kv_wide("effective_trade", &selected_account.effective_trade_state),
+        kv_wide(
+            "effective_reason",
+            selected_account
+                .effective_trade_reason
+                .as_deref()
+                .unwrap_or("-"),
+        ),
+        kv_wide("can_submit", mark(selected_account.can_submit_order)),
+        kv_wide("can_cancel", mark(selected_account.can_cancel_order)),
+        kv_wide("can_short", mark(selected_account.can_short)),
+        kv_wide("valuation", &selected_account.valuation_status),
         kv_wide(
             "short_blocked",
             &selected_account.short_intents_blocked_today.to_string(),
@@ -727,8 +905,20 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         for block in &state.risk.active_blocks {
             blocks.push(format!(
-                "{} / {} / {} / {}",
-                block.scope, block.rule_id, block.severity, block.message
+                "{} / {} / {} / {} / submit:{} cancel:{} short:{} cmd:{} / {}",
+                block.scope,
+                block.rule_id,
+                block.severity,
+                if block.source.is_empty() {
+                    "-"
+                } else {
+                    &block.source
+                },
+                mark(block.blocks_order_submit),
+                mark(block.blocks_cancel),
+                mark(block.blocks_short),
+                mark(block.blocks_command),
+                block.message
             ));
         }
     }
@@ -742,10 +932,34 @@ fn render_events(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
         .split(area);
 
-    let mut lines = vec![format!(
-        " {:<5} {:<20} {:<8} {:<14} {:<12} {}",
-        "SEQ", "TYPE", "AGG", "CORR", "PRODUCER", "HEADLINE"
-    )];
+    let hidden_by_filter_count = state
+        .audit
+        .events
+        .iter()
+        .filter(|event| !event_matches_search(event, &app.search_query))
+        .count();
+    let first_seq = state.audit.events.front().map(|event| event.sequence);
+    let last_seq = state.audit.events.back().map(|event| event.sequence);
+    let mut lines = vec![
+        format!(
+            " first:{} last:{} gaps:{} dupes:{} hidden:{} coalesced:{} retained:{}",
+            first_seq
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            last_seq
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            state.connection.sequence_gaps,
+            state.connection.duplicate_events,
+            hidden_by_filter_count,
+            state.connection.events_coalesced,
+            state.connection.audit_events_retained
+        ),
+        format!(
+            " {:<5} {:<20} {:<8} {:<14} {:<12} {}",
+            "SEQ", "TYPE", "AGG", "CORR", "PRODUCER", "HEADLINE"
+        ),
+    ];
     lines.extend(
         state
             .audit
@@ -786,6 +1000,16 @@ fn render_replay(frame: &mut Frame<'_>, area: Rect, app: &App) {
             "active_filter          {}",
             app.filter_summary.as_deref().unwrap_or("-")
         ),
+        format!(
+            "events_deduped         {}",
+            app.state.connection.duplicate_events
+        ),
+        format!(
+            "gaps_detected          {}",
+            app.state.connection.sequence_gaps
+        ),
+        "determinism_status      UNKNOWN".to_string(),
+        "replay_match_live       UNKNOWN".to_string(),
     ];
     frame.render_widget(panel("Replay", lines), area);
 }
@@ -880,6 +1104,25 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 lines.push(format!(
                     "  policies     {}",
                     command.matched_policy_ids.join(",")
+                ));
+            }
+            if !command.approved_by.is_empty() {
+                lines.push(format!("  approved_by  {}", command.approved_by.join(",")));
+            }
+            if command.capability.is_some()
+                || command.authority_decision_id.is_some()
+                || command.decided_ts_ns.is_some()
+                || command.target_environment.is_some()
+            {
+                lines.push(format!(
+                    "  auth_chain   decision={} capability={} decided_ts={} env={}",
+                    command.authority_decision_id.as_deref().unwrap_or("-"),
+                    command.capability.as_deref().unwrap_or("-"),
+                    command
+                        .decided_ts_ns
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    command.target_environment.as_deref().unwrap_or("-")
                 ));
             }
         }
@@ -1100,6 +1343,14 @@ fn event_detail_lines(state: &AppState, event: &EventSummary, query: &str) -> Ve
             event.checksum.as_deref().unwrap_or("-"),
         ));
     }
+    lines.push(String::new());
+    lines.push("AUDIT HASH".to_string());
+    lines.push(kv_narrow(
+        "checksum",
+        event.checksum.as_deref().unwrap_or("MISSING"),
+    ));
+    lines.push(kv_narrow("prev_hash", "MISSING"));
+    lines.push(kv_narrow("event_hash", "MISSING"));
 
     if !query.trim().is_empty() {
         lines.push(String::new());
@@ -1161,15 +1412,17 @@ fn selected_account_id(app: &App) -> String {
 
 fn format_account_row(account: &AccountView, selected: bool) -> String {
     format!(
-        "{} {:<14} {:<6} {:<8} {:<24} {:>+9.2} {:>5.1}% {}",
+        "{} {:<14} {:<6} {:<8} {:<10} {:<4} {:<5} {:<9} {:>+9.2} {:>5.1}%",
         if selected { ">" } else { " " },
         truncate(&account.account_id, 14),
         truncate(&account.mode, 6),
         truncate(&account.broker, 8),
-        truncate(&account.permission_summary(), 24),
+        truncate(&account.effective_trade_state, 10),
+        mark(account.broker_connected),
+        mark(account.can_submit_order),
+        truncate(&account.valuation_status, 9),
         account.day_pnl,
         account.exposure_pct,
-        runtime_flags(account),
     )
 }
 
@@ -1183,6 +1436,35 @@ fn format_strategy_row(strategy: &StrategyView, selected: bool) -> String {
         strategy.signals,
         strategy.intents,
         strategy.orders,
+    )
+}
+
+fn pending_order_qty(state: &AppState, account_id: &str, symbol: &str) -> (i64, i64) {
+    let mut open_buy_qty = 0;
+    let mut open_sell_qty = 0;
+    for chain in state.orders.by_correlation_id.values() {
+        if chain.account_id.as_deref() != Some(account_id)
+            || chain.symbol.as_deref() != Some(symbol)
+            || is_terminal_order_state(&chain.state)
+        {
+            continue;
+        }
+        let quantity = chain.leaves_quantity().unwrap_or(0).max(0);
+        match chain.side.as_deref().unwrap_or_default() {
+            "BUY" | "BOT" => open_buy_qty += quantity,
+            "SELL" | "SLD" | "SELL_SHORT" => open_sell_qty += quantity,
+            _ => {}
+        }
+    }
+    (open_buy_qty, open_sell_qty)
+}
+
+fn is_terminal_order_state(state: &OrderLifecycleState) -> bool {
+    matches!(
+        state,
+        OrderLifecycleState::Filled
+            | OrderLifecycleState::Cancelled
+            | OrderLifecycleState::BrokerRejected
     )
 }
 
@@ -1304,7 +1586,7 @@ fn format_order_row(chain: &OrderChain, selected: bool) -> String {
         "{}/{}",
         chain.filled_quantity,
         chain
-            .remaining_quantity
+            .leaves_quantity()
             .map(|value| value.to_string())
             .unwrap_or_else(|| "-".to_string())
     );

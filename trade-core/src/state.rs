@@ -238,6 +238,54 @@ pub struct AccountView {
     pub long_market_value: Money,
     #[serde(default)]
     pub short_market_value: Money,
+    #[serde(default)]
+    pub account_snapshot_id: Option<String>,
+    #[serde(default)]
+    pub account_snapshot_seq: Option<u64>,
+    #[serde(default)]
+    pub account_snapshot_source: Option<String>,
+    #[serde(default)]
+    pub account_snapshot_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub account_snapshot_age_ms: Option<u64>,
+    #[serde(default = "default_valuation_status")]
+    pub valuation_status: String,
+    #[serde(default)]
+    pub valuation_stale: bool,
+    #[serde(default)]
+    pub valuation_incomplete_reason: Option<String>,
+    #[serde(default)]
+    pub cash_source: Option<String>,
+    #[serde(default)]
+    pub buying_power_source: Option<String>,
+    #[serde(default)]
+    pub net_liq_source: Option<String>,
+    #[serde(default)]
+    pub available_funds_source: Option<String>,
+    #[serde(default)]
+    pub day_pnl_source: Option<String>,
+    #[serde(default)]
+    pub realized_source: Option<String>,
+    #[serde(default)]
+    pub unrealized_source: Option<String>,
+    #[serde(default = "default_effective_trade_state")]
+    pub effective_trade_state: String,
+    #[serde(default)]
+    pub effective_trade_reason: Option<String>,
+    #[serde(default)]
+    pub can_submit_order: bool,
+    #[serde(default)]
+    pub can_cancel_order: bool,
+    #[serde(default)]
+    pub can_modify_order: bool,
+    #[serde(default)]
+    pub can_liquidate: bool,
+    #[serde(default)]
+    pub can_short: bool,
+    #[serde(default)]
+    pub can_open_long: bool,
+    #[serde(default)]
+    pub can_close_position: bool,
 }
 
 impl Default for AccountView {
@@ -296,6 +344,87 @@ impl AccountView {
             net_exposure: Money::default(),
             long_market_value: Money::default(),
             short_market_value: Money::default(),
+            account_snapshot_id: None,
+            account_snapshot_seq: None,
+            account_snapshot_source: None,
+            account_snapshot_ts_ns: None,
+            account_snapshot_age_ms: None,
+            valuation_status: default_valuation_status(),
+            valuation_stale: false,
+            valuation_incomplete_reason: Some("no valuation snapshot".to_string()),
+            cash_source: None,
+            buying_power_source: None,
+            net_liq_source: None,
+            available_funds_source: None,
+            day_pnl_source: None,
+            realized_source: None,
+            unrealized_source: None,
+            effective_trade_state: default_effective_trade_state(),
+            effective_trade_reason: Some("NO_ACCOUNT_SNAPSHOT".to_string()),
+            can_submit_order: false,
+            can_cancel_order: false,
+            can_modify_order: false,
+            can_liquidate: false,
+            can_short: false,
+            can_open_long: false,
+            can_close_position: false,
+        }
+    }
+
+    pub fn normalize_legacy_money_fields(&mut self) {
+        if self.has_legacy_money_values() && self.money_fields_are_default() {
+            self.sync_legacy_money_from_f64();
+        } else {
+            self.sync_legacy_f64_from_money();
+        }
+    }
+
+    fn has_legacy_money_values(&self) -> bool {
+        self.cash != 0.0
+            || self.buying_power != 0.0
+            || self.day_pnl != 0.0
+            || self.realized_pnl != 0.0
+            || self.unrealized_pnl != 0.0
+    }
+
+    fn money_fields_are_default(&self) -> bool {
+        self.cash_value == Money::default()
+            && self.buying_power_value == Money::default()
+            && self.day_pnl_value == Money::default()
+            && self.realized_pnl_value == Money::default()
+            && self.unrealized_pnl_value == Money::default()
+    }
+
+    pub fn mark_account_snapshot(
+        &mut self,
+        snapshot_id: impl Into<String>,
+        sequence: Option<u64>,
+        source: impl Into<String>,
+        ts_ns: i64,
+    ) {
+        let source = source.into();
+        self.account_snapshot_id = Some(snapshot_id.into());
+        self.account_snapshot_seq = sequence;
+        self.account_snapshot_source = Some(source.clone());
+        self.account_snapshot_ts_ns = Some(ts_ns);
+        self.account_snapshot_age_ms = crate::unix_ts_ns()
+            .checked_sub(ts_ns)
+            .filter(|delta| *delta >= 0)
+            .map(|delta| (delta / 1_000_000) as u64);
+        self.refresh_valuation_status();
+    }
+
+    pub fn set_missing_money_sources(&mut self, source: &str) {
+        set_missing_source(&mut self.cash_source, source);
+        set_missing_source(&mut self.buying_power_source, source);
+        set_missing_source(&mut self.day_pnl_source, source);
+        set_missing_source(&mut self.realized_source, source);
+        set_missing_source(&mut self.unrealized_source, source);
+        if self.net_liquidation != Money::default() {
+            set_missing_source(&mut self.net_liq_source, source);
+        }
+        if self.available_funds != Money::default() {
+            set_missing_source(&mut self.available_funds_source, source);
         }
     }
 
@@ -318,6 +447,107 @@ impl AccountView {
         self.day_pnl = self.day_pnl_value.as_f64();
         self.realized_pnl = self.realized_pnl_value.as_f64();
         self.unrealized_pnl = self.unrealized_pnl_value.as_f64();
+    }
+
+    pub fn apply_position_mark_pnl(&mut self, unrealized_pnl: f64) {
+        self.unrealized_pnl = unrealized_pnl;
+        self.day_pnl = self.realized_pnl + self.unrealized_pnl;
+        let currency = if self.account_currency.is_empty() {
+            "USD".to_string()
+        } else {
+            self.account_currency.clone()
+        };
+        self.unrealized_pnl_value = Money::from_f64(self.unrealized_pnl, currency.clone());
+        self.day_pnl_value = Money::from_f64(self.day_pnl, currency);
+        self.unrealized_source = Some("internal_position_mark".to_string());
+        self.day_pnl_source = Some("internal_position_mark".to_string());
+        self.refresh_valuation_status();
+    }
+
+    pub fn refresh_valuation_status(&mut self) {
+        let mut missing = Vec::new();
+        if self.cash_source.is_none() {
+            missing.push("cash");
+        }
+        if self.buying_power_source.is_none() {
+            missing.push("buy_power");
+        }
+        if self.net_liq_source.is_none() {
+            missing.push("net_liq");
+        }
+        if self.available_funds_source.is_none() {
+            missing.push("available");
+        }
+        if self.day_pnl_source.is_none() {
+            missing.push("day_pnl");
+        }
+        if self.realized_source.is_none() {
+            missing.push("realized");
+        }
+        if self.unrealized_source.is_none() {
+            missing.push("unrealized");
+        }
+
+        self.valuation_stale = self
+            .account_snapshot_age_ms
+            .map(|age_ms| age_ms > 5_000)
+            .unwrap_or(false);
+        self.valuation_status = if missing.len() == 7 {
+            "MISSING".to_string()
+        } else if self.valuation_stale {
+            "STALE".to_string()
+        } else if missing.is_empty() {
+            "COMPLETE".to_string()
+        } else {
+            "PARTIAL".to_string()
+        };
+        self.valuation_incomplete_reason = if missing.is_empty() {
+            None
+        } else {
+            Some(format!("missing {}", missing.join(",")))
+        };
+    }
+
+    pub fn refresh_effective_trade_state(&mut self, order_channel_ok: bool) {
+        let mutation = self.mutation_permission_label();
+        let restriction = self
+            .trading_restriction
+            .as_deref()
+            .filter(|value| !value.is_empty());
+
+        let (state, reason) = if !self.broker_connected {
+            ("NO_TRADE", "BROKER_DOWN")
+        } else if !order_channel_ok {
+            ("NO_TRADE", "ORDER_CHANNEL_DOWN")
+        } else if mutation == "NO_TRADE" {
+            ("NO_TRADE", "NO_TRADE_ACCOUNT_MUTATION")
+        } else if mutation == "READONLY" {
+            ("READ_ONLY", "ACCOUNT_READ_ONLY")
+        } else if restriction.is_some() {
+            ("NO_TRADE", "ACCOUNT_RESTRICTION")
+        } else if self.valuation_status == "MISSING" {
+            ("NO_TRADE", "VALUATION_MISSING")
+        } else if self.valuation_status == "STALE" {
+            ("NO_TRADE", "VALUATION_STALE")
+        } else if self.valuation_status == "PARTIAL" {
+            ("DEGRADED", "VALUATION_PARTIAL")
+        } else if mutation == "TRADE?" {
+            ("DEGRADED", "ACCOUNT_MUTATION_UNKNOWN")
+        } else {
+            ("TRADE", "OK")
+        };
+
+        self.effective_trade_state = state.to_string();
+        self.effective_trade_reason = Some(reason.to_string());
+        let can_trade = state == "TRADE";
+        let can_operate_orders = self.broker_connected && order_channel_ok;
+        self.can_submit_order = can_trade;
+        self.can_cancel_order = can_operate_orders && state != "NO_TRADE";
+        self.can_modify_order = can_trade;
+        self.can_liquidate = can_operate_orders && state != "NO_TRADE";
+        self.can_short = can_trade && self.short_permission;
+        self.can_open_long = can_trade;
+        self.can_close_position = can_operate_orders && state != "NO_TRADE";
     }
 
     pub fn refresh_ocam_authority_mapping(&mut self) {
@@ -659,8 +889,154 @@ impl AccountStore {
         } else {
             Some(trading_restriction)
         };
+        aggregate.account_snapshot_source = Some("aggregate".to_string());
+        aggregate.account_snapshot_seq = self
+            .by_id
+            .values()
+            .filter_map(|account| account.account_snapshot_seq)
+            .max();
+        aggregate.account_snapshot_ts_ns = self
+            .by_id
+            .values()
+            .filter_map(|account| account.account_snapshot_ts_ns)
+            .min();
+        aggregate.account_snapshot_age_ms = self
+            .by_id
+            .values()
+            .filter_map(|account| account.account_snapshot_age_ms)
+            .max();
+        aggregate.cash_source = aggregate_source(
+            self.by_id
+                .values()
+                .map(|account| account.cash_source.as_deref()),
+        );
+        aggregate.buying_power_source = aggregate_source(
+            self.by_id
+                .values()
+                .map(|account| account.buying_power_source.as_deref()),
+        );
+        aggregate.net_liq_source = aggregate_source(
+            self.by_id
+                .values()
+                .map(|account| account.net_liq_source.as_deref()),
+        );
+        aggregate.available_funds_source = aggregate_source(
+            self.by_id
+                .values()
+                .map(|account| account.available_funds_source.as_deref()),
+        );
+        aggregate.day_pnl_source = aggregate_source(
+            self.by_id
+                .values()
+                .map(|account| account.day_pnl_source.as_deref()),
+        );
+        aggregate.realized_source = aggregate_source(
+            self.by_id
+                .values()
+                .map(|account| account.realized_source.as_deref()),
+        );
+        aggregate.unrealized_source = aggregate_source(
+            self.by_id
+                .values()
+                .map(|account| account.unrealized_source.as_deref()),
+        );
+        aggregate.valuation_status = aggregate_valuation_status(
+            self.by_id
+                .values()
+                .map(|account| account.valuation_status.as_str()),
+        );
+        aggregate.valuation_stale = self.by_id.values().any(|account| account.valuation_stale);
+        let valuation_reasons = self
+            .by_id
+            .values()
+            .filter_map(|account| account.valuation_incomplete_reason.as_deref())
+            .collect::<Vec<_>>();
+        aggregate.valuation_incomplete_reason = if valuation_reasons.is_empty() {
+            None
+        } else {
+            Some(valuation_reasons.join(";"))
+        };
+        aggregate.effective_trade_state = aggregate_trade_state(
+            self.by_id
+                .values()
+                .map(|account| account.effective_trade_state.as_str()),
+        );
+        aggregate.effective_trade_reason = if aggregate.effective_trade_state == "TRADE" {
+            Some("OK".to_string())
+        } else {
+            Some(
+                self.by_id
+                    .values()
+                    .filter_map(|account| account.effective_trade_reason.as_deref())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )
+        };
+        aggregate.can_submit_order = self.by_id.values().all(|account| account.can_submit_order);
+        aggregate.can_cancel_order = self.by_id.values().all(|account| account.can_cancel_order);
+        aggregate.can_modify_order = self.by_id.values().all(|account| account.can_modify_order);
+        aggregate.can_liquidate = self.by_id.values().all(|account| account.can_liquidate);
+        aggregate.can_short = self.by_id.values().all(|account| account.can_short);
+        aggregate.can_open_long = self.by_id.values().all(|account| account.can_open_long);
+        aggregate.can_close_position = self
+            .by_id
+            .values()
+            .all(|account| account.can_close_position);
         aggregate
     }
+}
+
+fn default_valuation_status() -> String {
+    "MISSING".to_string()
+}
+
+fn default_effective_trade_state() -> String {
+    "NO_TRADE".to_string()
+}
+
+fn set_missing_source(target: &mut Option<String>, source: &str) {
+    if target.is_none() && !source.is_empty() {
+        *target = Some(source.to_string());
+    }
+}
+
+fn aggregate_source<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<String> {
+    let mut sources = values
+        .into_iter()
+        .flatten()
+        .filter(|value| !value.is_empty());
+    let first = sources.next()?;
+    if sources.all(|source| source == first) {
+        Some(first.to_string())
+    } else {
+        Some("mixed".to_string())
+    }
+}
+
+fn aggregate_valuation_status<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    let mut status = "COMPLETE";
+    for value in values {
+        match value {
+            "MISSING" => return "MISSING".to_string(),
+            "STALE" => status = "STALE",
+            "PARTIAL" if status == "COMPLETE" => status = "PARTIAL",
+            _ => {}
+        }
+    }
+    status.to_string()
+}
+
+fn aggregate_trade_state<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    let mut state = "TRADE";
+    for value in values {
+        match value {
+            "NO_TRADE" => return "NO_TRADE".to_string(),
+            "READ_ONLY" => state = "READ_ONLY",
+            "DEGRADED" if state == "TRADE" => state = "DEGRADED",
+            _ => {}
+        }
+    }
+    state.to_string()
 }
 
 fn sum_money<'a>(values: impl IntoIterator<Item = &'a Money>) -> Money {
@@ -991,6 +1367,10 @@ pub struct OrderChain {
     pub parent_order_id: Option<String>,
     #[serde(default)]
     pub child_order_ids: Vec<String>,
+    #[serde(default)]
+    pub order_ref: Option<String>,
+    #[serde(default)]
+    pub strategy_order_ref: Option<String>,
     pub broker_status: Option<String>,
     pub order_type: Option<String>,
     pub limit_price: Option<Price>,
@@ -1009,6 +1389,14 @@ pub struct OrderChain {
     pub submitted_quantity: Option<i64>,
     #[serde(default)]
     pub remaining_quantity: Option<i64>,
+    #[serde(default)]
+    pub cum_qty_i64: Option<i64>,
+    #[serde(default)]
+    pub leaves_qty_i64: Option<i64>,
+    #[serde(default)]
+    pub display_qty: Option<i64>,
+    #[serde(default)]
+    pub min_qty: Option<i64>,
     #[serde(default)]
     pub cancelled_quantity: Option<i64>,
     #[serde(default)]
@@ -1046,6 +1434,8 @@ pub struct OrderChain {
     pub anomalies: Vec<String>,
     #[serde(default)]
     pub execution_ids: Vec<String>,
+    #[serde(default)]
+    pub fills: Vec<FillExecutionView>,
     pub timeline: Vec<TimelineEntry>,
 }
 
@@ -1066,6 +1456,8 @@ impl OrderChain {
             perm_id: None,
             parent_order_id: None,
             child_order_ids: Vec::new(),
+            order_ref: None,
+            strategy_order_ref: None,
             broker_status: None,
             order_type: None,
             limit_price: None,
@@ -1077,6 +1469,10 @@ impl OrderChain {
             currency: "USD".to_string(),
             submitted_quantity: None,
             remaining_quantity: None,
+            cum_qty_i64: None,
+            leaves_qty_i64: None,
+            display_qty: None,
+            min_qty: None,
             cancelled_quantity: None,
             rejected_quantity: None,
             risk: None,
@@ -1097,7 +1493,30 @@ impl OrderChain {
             latency: LatencyBreakdown::default(),
             anomalies: Vec::new(),
             execution_ids: Vec::new(),
+            fills: Vec::new(),
             timeline: Vec::new(),
+        }
+    }
+
+    pub fn total_quantity(&self) -> Option<i64> {
+        self.intended_quantity
+            .or(self.submitted_quantity)
+            .or_else(|| {
+                self.remaining_quantity
+                    .map(|remaining| self.filled_quantity + remaining)
+            })
+    }
+
+    pub fn leaves_quantity(&self) -> Option<i64> {
+        self.leaves_qty_i64.or(self.remaining_quantity)
+    }
+
+    pub fn quantity_status(&self) -> &'static str {
+        match (self.total_quantity(), self.leaves_quantity()) {
+            (Some(total), Some(remaining)) if self.filled_quantity + remaining == total => "OK",
+            (Some(_), Some(_)) => "INCONSISTENT",
+            (Some(_), None) => "MISSING_LEAVES",
+            (None, _) => "MISSING_TOTAL",
         }
     }
 
@@ -1179,9 +1598,37 @@ impl OrderChain {
         }
         self.filled_quantity = new_quantity;
         self.remaining_quantity = remaining_quantity;
+        self.cum_qty_i64 = Some(new_quantity);
+        self.leaves_qty_i64 = remaining_quantity;
         self.last_fill_price = Some(price);
         true
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FillExecutionView {
+    pub exec_id: Option<String>,
+    #[serde(default)]
+    pub broker_exec_id: Option<String>,
+    pub fill_seq: u64,
+    pub qty: i64,
+    pub price: Price,
+    #[serde(default)]
+    pub venue: Option<String>,
+    #[serde(default)]
+    pub liquidity_flag: Option<String>,
+    #[serde(default)]
+    pub commission: Option<Money>,
+    #[serde(default)]
+    pub fees: Vec<Money>,
+    #[serde(default)]
+    pub currency: Option<String>,
+    #[serde(default)]
+    pub fill_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub report_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub position_after_fill: Option<i64>,
 }
 
 fn is_valid_order_transition(current: &OrderLifecycleState, next: &OrderLifecycleState) -> bool {
@@ -1350,6 +1797,8 @@ pub struct RiskBlock {
     pub severity: String,
     pub message: String,
     #[serde(default)]
+    pub source: String,
+    #[serde(default)]
     pub first_seen_ts_ns: i64,
     #[serde(default)]
     pub last_seen_ts_ns: i64,
@@ -1361,6 +1810,187 @@ pub struct RiskBlock {
     pub symbol: Option<String>,
     #[serde(default)]
     pub strategy_id: Option<String>,
+    #[serde(default)]
+    pub blocks_order_submit: bool,
+    #[serde(default)]
+    pub blocks_cancel: bool,
+    #[serde(default)]
+    pub blocks_short: bool,
+    #[serde(default)]
+    pub blocks_command: bool,
+}
+
+pub fn refresh_account_safety_state(state: &mut AppState, ts_ns: i64) {
+    let order_channel_ok = state.risk.broker_order_channel_ok;
+    let mut derived_blocks = Vec::new();
+    for account in state.accounts.by_id.values_mut() {
+        account.refresh_valuation_status();
+        account.refresh_effective_trade_state(order_channel_ok);
+        derived_blocks.extend(derived_blocks_for_account(account, ts_ns, order_channel_ok));
+    }
+
+    state
+        .risk
+        .active_blocks
+        .retain(|block| block.source != "account_effective_state");
+    state.risk.active_blocks.extend(derived_blocks);
+    state.account = state.accounts.aggregate_view();
+}
+
+fn derived_blocks_for_account(
+    account: &AccountView,
+    ts_ns: i64,
+    order_channel_ok: bool,
+) -> Vec<RiskBlock> {
+    let mut blocks = Vec::new();
+    let scope = format!("account:{}", account.account_id);
+    if !account.broker_connected {
+        blocks.push(account_block(
+            account,
+            &scope,
+            "BROKER_DOWN",
+            "broker connection is not healthy",
+            ts_ns,
+            true,
+            true,
+            true,
+            true,
+        ));
+    }
+    if !order_channel_ok {
+        blocks.push(account_block(
+            account,
+            &scope,
+            "ORDER_CHANNEL_DOWN",
+            "order channel is unavailable",
+            ts_ns,
+            true,
+            true,
+            true,
+            true,
+        ));
+    }
+    match account.mutation_permission_label() {
+        "NO_TRADE" => blocks.push(account_block(
+            account,
+            &scope,
+            "NO_TRADE_ACCOUNT_MUTATION",
+            "account permission mutation is NO_TRADE",
+            ts_ns,
+            true,
+            true,
+            true,
+            true,
+        )),
+        "READONLY" => blocks.push(account_block(
+            account,
+            &scope,
+            "READ_ONLY_ACCOUNT_MUTATION",
+            "account permission mutation is READONLY",
+            ts_ns,
+            true,
+            false,
+            true,
+            false,
+        )),
+        "TRADE?" => blocks.push(account_block(
+            account,
+            &scope,
+            "UNKNOWN_ACCOUNT_MUTATION",
+            "account trade mutation is unknown",
+            ts_ns,
+            true,
+            false,
+            true,
+            false,
+        )),
+        _ => {}
+    }
+    if !account.short_permission {
+        blocks.push(account_block(
+            account,
+            &scope,
+            "NO_SHORT_ACCOUNT_PERMISSION",
+            "account is long-only",
+            ts_ns,
+            false,
+            false,
+            true,
+            false,
+        ));
+    }
+    if let Some(reason) = account
+        .trading_restriction
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        blocks.push(account_block(
+            account,
+            &scope,
+            "ACCOUNT_RESTRICTION",
+            reason,
+            ts_ns,
+            true,
+            false,
+            true,
+            false,
+        ));
+    }
+    if matches!(
+        account.valuation_status.as_str(),
+        "MISSING" | "STALE" | "PARTIAL"
+    ) {
+        blocks.push(account_block(
+            account,
+            &scope,
+            &format!("VALUATION_{}", account.valuation_status),
+            account
+                .valuation_incomplete_reason
+                .as_deref()
+                .unwrap_or("account valuation is not complete"),
+            ts_ns,
+            matches!(account.valuation_status.as_str(), "MISSING" | "STALE"),
+            false,
+            false,
+            false,
+        ));
+    }
+    blocks
+}
+
+fn account_block(
+    account: &AccountView,
+    scope: &str,
+    reason_code: &str,
+    message: &str,
+    ts_ns: i64,
+    blocks_order_submit: bool,
+    blocks_cancel: bool,
+    blocks_short: bool,
+    blocks_command: bool,
+) -> RiskBlock {
+    RiskBlock {
+        block_id: format!("{}:{reason_code}", account.account_id),
+        rule_id: reason_code.to_string(),
+        scope: scope.to_string(),
+        severity: if blocks_order_submit || blocks_cancel || blocks_short {
+            "HARD_BLOCK".to_string()
+        } else {
+            "SOFT_WARN".to_string()
+        },
+        message: message.to_string(),
+        source: "account_effective_state".to_string(),
+        first_seen_ts_ns: ts_ns,
+        last_seen_ts_ns: ts_ns,
+        cleared_ts_ns: None,
+        correlation_id: None,
+        symbol: None,
+        strategy_id: None,
+        blocks_order_submit,
+        blocks_cancel,
+        blocks_short,
+        blocks_command,
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

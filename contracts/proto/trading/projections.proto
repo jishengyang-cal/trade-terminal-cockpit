@@ -53,6 +53,30 @@ message OverviewSnapshot {
   optional bool readonly = 46;
   optional bool margin_account = 47;
   string account_type = 48;
+  string account_snapshot_id = 49;
+  optional uint64 account_snapshot_seq = 50;
+  string account_snapshot_source = 51;
+  optional int64 account_snapshot_ts_ns = 52;
+  optional uint64 account_snapshot_age_ms = 53;
+  string valuation_status = 54;
+  bool valuation_stale = 55;
+  string valuation_incomplete_reason = 56;
+  string cash_source = 57;
+  string buying_power_source = 58;
+  string net_liq_source = 59;
+  string available_funds_source = 60;
+  string day_pnl_source = 61;
+  string realized_source = 62;
+  string unrealized_source = 63;
+  string effective_trade_state = 64;
+  string effective_trade_reason = 65;
+  bool can_submit_order = 66;
+  bool can_cancel_order = 67;
+  bool can_modify_order = 68;
+  bool can_liquidate = 69;
+  bool can_short = 70;
+  bool can_open_long = 71;
+  bool can_close_position = 72;
 }
 
 message AccountRuntimeControls {
@@ -110,6 +134,31 @@ message OrderTimelineEntry {
   string summary = 4;
 }
 
+message OrderFillProjection {
+  string exec_id = 1;
+  string broker_exec_id = 2;
+  uint64 fill_seq = 3;
+  int64 qty = 4;
+  Price price = 5;
+  string venue = 6;
+  string liquidity_flag = 7;
+  Money commission = 8;
+  repeated Money fees = 9;
+  string currency = 10;
+  optional int64 fill_ts_ns = 11;
+  optional int64 report_ts_ns = 12;
+  optional int64 position_after_fill = 13;
+}
+
+message OrderRiskProjection {
+  bool approved = 1;
+  repeated string reason_codes = 2;
+  string severity = 3;
+  string decision_id = 4;
+  string risk_snapshot_id = 5;
+  string authority_policy_version = 6;
+}
+
 message OrderTimeline {
   string correlation_id = 1;
   string strategy_id = 2;
@@ -138,6 +187,14 @@ message OrderTimeline {
   optional int64 terminal_ts_ns = 25;
   LatencyBreakdown latency = 26;
   repeated string anomalies = 27;
+  string order_ref = 28;
+  string strategy_order_ref = 29;
+  optional int64 cum_qty_i64 = 30;
+  optional int64 leaves_qty_i64 = 31;
+  optional int64 display_qty = 32;
+  optional int64 min_qty = 33;
+  repeated OrderFillProjection fills = 34;
+  OrderRiskProjection risk = 35;
 }
 
 message PositionProjection {
@@ -176,6 +233,11 @@ message RiskBlock {
   string correlation_id = 9;
   string symbol = 10;
   string strategy_id = 11;
+  string source = 12;
+  bool blocks_order_submit = 13;
+  bool blocks_cancel = 14;
+  bool blocks_short = 15;
+  bool blocks_command = 16;
 }
 
 message RiskLimitView {

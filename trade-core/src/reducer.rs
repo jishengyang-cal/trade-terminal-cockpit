@@ -6,8 +6,9 @@ use crate::events::{
     SignalGenerated, StrategyHealthUpdated, StrategyHeartbeat, StrategyStateChanged,
 };
 use crate::state::{
-    AlertView, AppState, EventSummary, MarketDataSummaryView, OrderLifecycleState, PositionView,
-    RiskBlock, RiskDecisionView, RiskLimitView, StrategyPositionView,
+    refresh_account_safety_state, AlertView, AppState, EventSummary, FillExecutionView,
+    MarketDataSummaryView, OrderLifecycleState, PositionView, RiskBlock, RiskDecisionView,
+    RiskLimitView, StrategyPositionView,
 };
 
 pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
@@ -58,10 +59,11 @@ pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
     let sequence = envelope.sequence;
     let publish_ts_ns = envelope.publish_ts_ns;
     let event_id = envelope.event_id.clone();
+    let producer = envelope.producer.clone();
 
     match envelope.payload {
         DomainEvent::AccountSnapshot(event) => {
-            reduce_account_snapshot(state, event);
+            reduce_account_snapshot(state, sequence, publish_ts_ns, &event_id, &producer, event);
         }
         DomainEvent::MarketDataSummary(event) => {
             state.market_data.upsert(MarketDataSummaryView {
@@ -151,8 +153,20 @@ fn is_coalescible_projection_event(event: &DomainEvent) -> bool {
     )
 }
 
-fn reduce_account_snapshot(state: &mut AppState, event: AccountSnapshot) {
+fn reduce_account_snapshot(
+    state: &mut AppState,
+    sequence: u64,
+    publish_ts_ns: i64,
+    event_id: &str,
+    producer: &str,
+    event: AccountSnapshot,
+) {
     let account = state.accounts.get_or_insert(&event.account_id);
+    let source = if producer.is_empty() {
+        "account_snapshot"
+    } else {
+        producer
+    };
     if event.canonical_account_id.is_some() {
         account.canonical_account_id = event.canonical_account_id;
     }
@@ -194,21 +208,27 @@ fn reduce_account_snapshot(state: &mut AppState, event: AccountSnapshot) {
     }
     if let Some(value) = event.cash {
         account.cash_value = value;
+        account.cash_source = Some(source.to_string());
     }
     if let Some(value) = event.buying_power {
         account.buying_power_value = value;
+        account.buying_power_source = Some(source.to_string());
     }
     if let Some(value) = event.day_pnl {
         account.day_pnl_value = value;
+        account.day_pnl_source = Some(source.to_string());
     }
     if let Some(value) = event.realized_pnl {
         account.realized_pnl_value = value;
+        account.realized_source = Some(source.to_string());
     }
     if let Some(value) = event.unrealized_pnl {
         account.unrealized_pnl_value = value;
+        account.unrealized_source = Some(source.to_string());
     }
     if let Some(value) = event.net_liquidation {
         account.net_liquidation = value;
+        account.net_liq_source = Some(source.to_string());
     }
     if let Some(value) = event.equity_with_loan {
         account.equity_with_loan = value;
@@ -224,6 +244,7 @@ fn reduce_account_snapshot(state: &mut AppState, event: AccountSnapshot) {
     }
     if let Some(value) = event.available_funds {
         account.available_funds = value;
+        account.available_funds_source = Some(source.to_string());
     }
     if event.sma.is_some() {
         account.sma = event.sma;
@@ -275,7 +296,8 @@ fn reduce_account_snapshot(state: &mut AppState, event: AccountSnapshot) {
     }
     account.refresh_ocam_authority_mapping();
     account.sync_legacy_f64_from_money();
-    refresh_account_aggregate(state);
+    account.mark_account_snapshot(event_id.to_string(), Some(sequence), source, publish_ts_ns);
+    refresh_account_safety_state(state, publish_ts_ns);
 }
 
 fn reduce_strategy_heartbeat(state: &mut AppState, sequence: u64, event: StrategyHeartbeat) {
@@ -517,12 +539,17 @@ fn reduce_risk_decision(
                 scope: format!("{}/{}", event.strategy_id, event.symbol),
                 severity: event.severity.unwrap_or_else(|| "block".to_string()),
                 message,
+                source: "risk_decision".to_string(),
                 first_seen_ts_ns: publish_ts_ns,
                 last_seen_ts_ns: publish_ts_ns,
                 cleared_ts_ns: None,
                 correlation_id: Some(event.correlation_id),
                 symbol: Some(event.symbol),
                 strategy_id: Some(event.strategy_id),
+                blocks_order_submit: true,
+                blocks_cancel: false,
+                blocks_short: true,
+                blocks_command: true,
             },
         );
         if event
@@ -557,6 +584,9 @@ fn reduce_order_submit_requested(
     chain.broker_order_id = event.broker_order_id.clone();
     chain.perm_id = event.perm_id.clone();
     chain.parent_order_id = event.parent_order_id.clone();
+    chain.order_ref = event.order_ref.clone();
+    chain.strategy_order_ref = event.order_ref.clone().or(chain.strategy_order_ref.clone());
+    chain.side = event.side.clone().or(chain.side.clone());
     chain.order_type = Some(event.order_type.clone());
     chain.limit_price = event.limit_price.clone();
     chain.stop_price = event.stop_price.clone();
@@ -564,8 +594,15 @@ fn reduce_order_submit_requested(
     chain.route = event.route.clone();
     chain.exchange = event.exchange.clone();
     chain.destination = event.destination.clone();
+    if chain.intended_quantity.is_none() {
+        chain.intended_quantity = event.quantity;
+    }
     chain.submitted_quantity = event.quantity;
     chain.remaining_quantity = event.remaining_quantity.or(event.quantity);
+    chain.cum_qty_i64 = Some(0);
+    chain.leaves_qty_i64 = chain.remaining_quantity;
+    chain.display_qty = event.display_size;
+    chain.min_qty = event.min_qty;
     chain.submit_ts_ns = Some(publish_ts_ns);
     chain.transition_state(OrderLifecycleState::SubmitRequested, event_id, sequence);
     chain.push_timeline(
@@ -652,6 +689,7 @@ fn reduce_broker_ack(
     }
     chain.broker_status = Some(event.broker_status.clone());
     chain.remaining_quantity = event.remaining_quantity;
+    chain.leaves_qty_i64 = event.remaining_quantity;
     chain.ack_ts_ns = Some(publish_ts_ns);
     if let Some(submit_ts_ns) = chain.submit_ts_ns {
         chain.latency.submit_to_ack_ms = non_negative_delta_ms(publish_ts_ns, submit_ts_ns);
@@ -687,6 +725,24 @@ fn reduce_order_fill(
         .clone()
         .unwrap_or_else(|| event.fill_price.clone());
     let last_quantity = event.last_quantity.unwrap_or(event.filled_quantity);
+    let fill_view = FillExecutionView {
+        exec_id: event.execution_id.clone(),
+        broker_exec_id: event.broker_execution_id.clone(),
+        fill_seq: sequence,
+        qty: last_quantity,
+        price: last_price.clone(),
+        venue: event.venue.clone(),
+        liquidity_flag: event.liquidity.clone(),
+        commission: event.commission.clone(),
+        fees: event.fees.iter().map(|fee| fee.amount.clone()).collect(),
+        currency: event
+            .settlement_currency
+            .clone()
+            .or_else(|| Some(last_price.currency.clone())),
+        fill_ts_ns: event.trade_ts_ns.or(Some(publish_ts_ns)),
+        report_ts_ns: event.report_ts_ns,
+        position_after_fill: None,
+    };
     let applied = chain.apply_fill(
         event.execution_id.as_deref(),
         last_quantity,
@@ -701,6 +757,7 @@ fn reduce_order_fill(
         chain.commission = Some(commission);
     }
     if applied {
+        chain.fills.push(fill_view);
         chain.first_fill_ts_ns.get_or_insert(publish_ts_ns);
         chain.last_fill_ts_ns = Some(publish_ts_ns);
         if let Some(ack_ts_ns) = chain.ack_ts_ns {
@@ -851,12 +908,17 @@ fn reduce_risk_limit_breached(state: &mut AppState, publish_ts_ns: i64, event: R
             scope: event.scope,
             severity: event.severity,
             message: event.message,
+            source: "risk_limit".to_string(),
             first_seen_ts_ns: event.first_seen_ts_ns.unwrap_or(publish_ts_ns),
             last_seen_ts_ns: event.last_seen_ts_ns.unwrap_or(publish_ts_ns),
             cleared_ts_ns: event.cleared_ts_ns,
             correlation_id: event.correlation_id,
             symbol: event.symbol,
             strategy_id: event.strategy_id,
+            blocks_order_submit: true,
+            blocks_cancel: false,
+            blocks_short: true,
+            blocks_command: true,
         },
     );
 }
@@ -1023,13 +1085,12 @@ fn recalculate_account_position_pnl(state: &mut AppState, account_id: &str) {
         .map(|position| position.unrealized_pnl)
         .sum::<f64>();
     let account = state.accounts.get_or_insert(account_id);
-    account.unrealized_pnl = unrealized_pnl;
-    account.day_pnl = account.realized_pnl + account.unrealized_pnl;
+    account.apply_position_mark_pnl(unrealized_pnl);
     refresh_account_aggregate(state);
 }
 
 fn refresh_account_aggregate(state: &mut AppState) {
-    state.account = state.accounts.aggregate_view();
+    refresh_account_safety_state(state, crate::unix_ts_ns());
 }
 
 fn command_was_applied(status: &str) -> bool {
@@ -1064,10 +1125,15 @@ fn upsert_risk_block(state: &mut AppState, mut next: RiskBlock) {
         existing.last_seen_ts_ns = next.last_seen_ts_ns;
         existing.severity = next.severity;
         existing.message = next.message;
+        existing.source = next.source;
         existing.cleared_ts_ns = next.cleared_ts_ns;
         existing.correlation_id = next.correlation_id;
         existing.symbol = next.symbol;
         existing.strategy_id = next.strategy_id;
+        existing.blocks_order_submit = next.blocks_order_submit;
+        existing.blocks_cancel = next.blocks_cancel;
+        existing.blocks_short = next.blocks_short;
+        existing.blocks_command = next.blocks_command;
         return;
     }
 

@@ -42,6 +42,17 @@ fn projection_snapshot_initializes_trade_cockpit_state() {
     assert_eq!(state.alerts.open_count(), 1);
     assert_eq!(state.connection.nats, "state-projectiond-json");
     assert_eq!(state.connection.last_event_sequence, Some(41));
+    let account = state.accounts.by_id.get("paper-main").unwrap();
+    assert!((account.day_pnl - 12.50).abs() < 0.0001);
+    assert!((account.day_pnl_value.as_f64() - 12.50).abs() < 0.0001);
+    assert_eq!(
+        account.day_pnl_source.as_deref(),
+        Some("internal_position_mark")
+    );
+    assert_eq!(account.valuation_status, "STALE");
+    assert!(state.risk.active_blocks.iter().any(|block| {
+        block.scope == "account:paper-main" && block.rule_id == "ORDER_CHANNEL_DOWN"
+    }));
 }
 
 #[test]

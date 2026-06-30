@@ -1,6 +1,6 @@
 use crate::state::{
-    AccountView, AlertView, AppState, MarketDataSummaryView, OrderChain, PositionView, RiskView,
-    StrategyView,
+    refresh_account_safety_state, AccountView, AlertView, AppState, MarketDataSummaryView,
+    OrderChain, PositionView, RiskView, StrategyView,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +26,12 @@ pub fn apply_projection_snapshot(state: &mut AppState, snapshot: ProjectionSnaps
     state.accounts.by_id.clear();
     if let Some(account) = snapshot.account {
         let mut account = account;
-        account.refresh_ocam_authority_mapping();
+        normalize_projection_account(
+            &mut account,
+            &snapshot.source,
+            snapshot.last_event_sequence,
+            snapshot.snapshot_ts_ns,
+        );
         state
             .accounts
             .by_id
@@ -34,7 +39,12 @@ pub fn apply_projection_snapshot(state: &mut AppState, snapshot: ProjectionSnaps
     }
     for account in snapshot.accounts {
         let mut account = account;
-        account.refresh_ocam_authority_mapping();
+        normalize_projection_account(
+            &mut account,
+            &snapshot.source,
+            snapshot.last_event_sequence,
+            snapshot.snapshot_ts_ns,
+        );
         state
             .accounts
             .by_id
@@ -83,11 +93,11 @@ pub fn apply_projection_snapshot(state: &mut AppState, snapshot: ProjectionSnaps
             .by_id
             .insert(account.account_id.clone(), account);
     }
-    state.account = state.accounts.aggregate_view();
 
     if let Some(risk) = snapshot.risk {
         state.risk = risk;
     }
+    refresh_account_safety_state(state, snapshot.snapshot_ts_ns);
 
     state.alerts.by_id.clear();
     for alert in snapshot.alerts {
@@ -101,13 +111,30 @@ pub fn apply_projection_snapshot(state: &mut AppState, snapshot: ProjectionSnaps
 
 fn recalculate_account_pnls_from_positions(state: &mut AppState) {
     for account in state.accounts.by_id.values_mut() {
-        account.unrealized_pnl = state
+        let unrealized_pnl = state
             .positions
             .by_key
             .values()
             .filter(|position| position.account_id == account.account_id)
             .map(|position| position.unrealized_pnl)
             .sum();
-        account.day_pnl = account.realized_pnl + account.unrealized_pnl;
+        account.apply_position_mark_pnl(unrealized_pnl);
     }
+}
+
+fn normalize_projection_account(
+    account: &mut AccountView,
+    source: &str,
+    sequence: Option<u64>,
+    snapshot_ts_ns: i64,
+) {
+    account.normalize_legacy_money_fields();
+    account.refresh_ocam_authority_mapping();
+    account.set_missing_money_sources(source);
+    account.mark_account_snapshot(
+        format!("projection:{}:{}", source, account.account_id),
+        sequence,
+        source,
+        snapshot_ts_ns,
+    );
 }

@@ -124,6 +124,7 @@ fn duplicate_event_ids_are_idempotent() {
 #[test]
 fn account_snapshot_derives_ocam_authority_mapping() {
     let mut state = AppState::default();
+    state.risk.broker_order_channel_ok = true;
     reduce_event(
         &mut state,
         EventEnvelope::new(
@@ -162,11 +163,109 @@ fn account_snapshot_derives_ocam_authority_mapping() {
 }
 
 #[test]
+fn account_no_trade_mutation_creates_account_block() {
+    let mut state = AppState::default();
+    state.risk.broker_order_channel_ok = true;
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-account-no-trade",
+            "corr-account-no-trade",
+            1,
+            "account-projection",
+            DomainEvent::AccountSnapshot(AccountSnapshot {
+                account_id: "paper-data-only".to_string(),
+                broker_connected: Some(true),
+                role_bits: Some(0b01),
+                readonly: Some(false),
+                short_permission: Some(true),
+                ..Default::default()
+            }),
+        ),
+    );
+
+    let account = state.accounts.by_id.get("paper-data-only").unwrap();
+    assert_eq!(account.effective_trade_state, "NO_TRADE");
+    assert_eq!(
+        account.effective_trade_reason.as_deref(),
+        Some("NO_TRADE_ACCOUNT_MUTATION")
+    );
+    assert!(state.risk.active_blocks.iter().any(|block| {
+        block.scope == "account:paper-data-only"
+            && block.rule_id == "NO_TRADE_ACCOUNT_MUTATION"
+            && block.blocks_order_submit
+    }));
+}
+
+#[test]
+fn order_channel_down_creates_account_block_without_hardcoded_account() {
+    let mut state = AppState::default();
+    state.risk.broker_order_channel_ok = false;
+    for (sequence, account_id) in [(1, "paper-main"), (2, "paper-alt")] {
+        reduce_event(
+            &mut state,
+            EventEnvelope::new(
+                format!("evt-account-channel-{sequence}"),
+                format!("corr-account-channel-{sequence}"),
+                sequence,
+                "account-projection",
+                DomainEvent::AccountSnapshot(AccountSnapshot {
+                    account_id: account_id.to_string(),
+                    broker_connected: Some(true),
+                    role_bits: Some(0b11),
+                    readonly: Some(false),
+                    short_permission: Some(true),
+                    ..Default::default()
+                }),
+            ),
+        );
+    }
+
+    for account_id in ["paper-main", "paper-alt"] {
+        let account = state.accounts.by_id.get(account_id).unwrap();
+        assert_eq!(
+            account.effective_trade_reason.as_deref(),
+            Some("ORDER_CHANNEL_DOWN")
+        );
+        assert!(state.risk.active_blocks.iter().any(|block| {
+            block.scope == format!("account:{account_id}")
+                && block.rule_id == "ORDER_CHANNEL_DOWN"
+                && block.blocks_order_submit
+                && block.blocks_cancel
+        }));
+    }
+}
+
+#[test]
 fn cumulative_fills_do_not_double_count_quantity() {
     let mut state = AppState::default();
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-fill-submit-001",
+            "corr-fill-cumulative",
+            1,
+            "test",
+            DomainEvent::OrderSubmitRequested(OrderSubmitRequested {
+                correlation_id: "corr-fill-cumulative".to_string(),
+                account_id: "paper-main".to_string(),
+                order_id: "ord-fill-cumulative".to_string(),
+                order_type: "LMT".to_string(),
+                limit_price: Some(Price::from_f64(123.45, "USD")),
+                tif: "DAY".to_string(),
+                side: Some("BUY".to_string()),
+                quantity: Some(100),
+                remaining_quantity: Some(100),
+                order_ref: Some("open-scalp:ord-fill-cumulative".to_string()),
+                min_qty: Some(10),
+                display_size: Some(50),
+                ..Default::default()
+            }),
+        ),
+    );
     for (event_id, sequence, last_quantity, cumulative_quantity, remaining_quantity, price) in [
-        ("evt-fill-cumulative-001", 1, 40, 40, 60, 123.45),
-        ("evt-fill-cumulative-002", 2, 60, 100, 0, 123.46),
+        ("evt-fill-cumulative-001", 2, 40, 40, 60, 123.45),
+        ("evt-fill-cumulative-002", 3, 60, 100, 0, 123.46),
     ] {
         reduce_event(
             &mut state,
@@ -180,6 +279,7 @@ fn cumulative_fills_do_not_double_count_quantity() {
                     account_id: "paper-main".to_string(),
                     order_id: "ord-fill-cumulative".to_string(),
                     execution_id: Some(format!("exec-{sequence}")),
+                    broker_execution_id: Some(format!("broker-exec-{sequence}")),
                     filled_quantity: last_quantity,
                     fill_price: Price::from_f64(price, "USD"),
                     last_quantity: Some(last_quantity),
@@ -198,6 +298,18 @@ fn cumulative_fills_do_not_double_count_quantity() {
         .unwrap();
     assert_eq!(chain.filled_quantity, 100);
     assert_eq!(chain.remaining_quantity, Some(0));
+    assert_eq!(chain.total_quantity(), Some(100));
+    assert_eq!(chain.cum_qty_i64, Some(100));
+    assert_eq!(chain.leaves_qty_i64, Some(0));
+    assert_eq!(chain.quantity_status(), "OK");
+    assert_eq!(
+        chain.order_ref.as_deref(),
+        Some("open-scalp:ord-fill-cumulative")
+    );
+    assert_eq!(chain.display_qty, Some(50));
+    assert_eq!(chain.min_qty, Some(10));
+    assert_eq!(chain.fills.len(), 2);
+    assert_eq!(chain.fills[0].exec_id.as_deref(), Some("exec-2"));
     assert!((chain.average_fill_price.as_ref().unwrap().as_f64() - 123.456).abs() < 0.0001);
 }
 
