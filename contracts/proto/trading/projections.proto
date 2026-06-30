@@ -42,6 +42,9 @@ message OverviewSnapshot {
   Money net_exposure = 35;
   Money long_market_value = 36;
   Money short_market_value = 37;
+  // OCaml account authority mirror:
+  // trading_types_ext.account_table/account_topology own canonical id,
+  // account_slot, hash, endpoint, client_id, role_bits, readonly, gateway_tier.
   string canonical_account_id = 38;
   optional uint32 account_slot = 39;
   string account_id_hash_hex = 40;
@@ -53,6 +56,9 @@ message OverviewSnapshot {
   optional bool readonly = 46;
   optional bool margin_account = 47;
   string account_type = 48;
+  // Cockpit materialized valuation metadata. These are projection-state truth
+  // fields derived from account snapshots and position marks; they are not
+  // OCaml account-authority inputs.
   string account_snapshot_id = 49;
   optional uint64 account_snapshot_seq = 50;
   string account_snapshot_source = 51;
@@ -187,6 +193,9 @@ message OrderTimeline {
   optional int64 terminal_ts_ns = 25;
   LatencyBreakdown latency = 26;
   repeated string anomalies = 27;
+  // OCaml/TWS authority mirror:
+  // tws_protocol.schema owns order_ref; fsm_compiler.execution_projection_contract
+  // owns cum_qty_i64 and leaves_qty_i64 naming.
   string order_ref = 28;
   string strategy_order_ref = 29;
   optional int64 cum_qty_i64 = 30;
