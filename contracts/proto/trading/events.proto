@@ -29,6 +29,11 @@ message EventEnvelope {
   string trace_id = 22;
   string span_id = 23;
   string checksum = 24;
+  string event_hash = 25;
+  string prev_event_hash = 26;
+  optional uint64 aggregate_version = 27;
+  string aggregate_hash = 28;
+  string projection_version = 29;
 }
 
 message AccountSnapshot {
@@ -73,6 +78,23 @@ message AccountSnapshot {
   optional bool readonly = 39;
   optional bool margin_account = 40;
   string account_type = 41;
+  string account_snapshot_id = 42;
+  optional uint64 account_snapshot_seq = 43;
+  string account_snapshot_source = 44;
+  optional int64 account_snapshot_ts_ns = 45;
+  optional uint64 account_snapshot_age_ms = 46;
+  string valuation_status = 47;
+  optional bool valuation_ok = 48;
+  optional bool valuation_stale = 49;
+  string valuation_incomplete_reason = 50;
+  string cash_source = 51;
+  string buying_power_source = 52;
+  string net_liq_source = 53;
+  string available_funds_source = 54;
+  string day_pnl_source = 55;
+  string realized_source = 56;
+  string unrealized_source = 57;
+  string valuation_source = 58;
 }
 
 message MarketDataSummary {
@@ -100,6 +122,15 @@ message StrategyRiskGateProjection {
   string name = 1;
   bool passed = 2;
   string detail = 3;
+  string scope = 4;
+  string observed = 5;
+  string limit = 6;
+  string status = 7;
+  string severity = 8;
+  string reason = 9;
+  string policy_version = 10;
+  optional uint64 source_seq = 11;
+  optional int64 evaluated_ts_ns = 12;
 }
 
 message StrategyHealthUpdated {
@@ -125,6 +156,39 @@ message StrategyHealthUpdated {
   optional double daily_loss_used_pct = 20;
   map<string, string> parameters = 21;
   repeated StrategyRiskGateProjection risk_gates = 22;
+  optional uint64 signals_total_today = 23;
+  optional uint64 signals_last_1m = 24;
+  optional uint64 intents_total_today = 25;
+  optional uint64 orders_total_today = 26;
+  optional uint64 fills_total_today = 27;
+  optional uint64 partial_fills_today = 28;
+  optional uint64 cancels_total_today = 29;
+  optional uint64 rejects_total_today = 30;
+  Money strategy_realized_pnl = 31;
+  Money strategy_unrealized_pnl = 32;
+  Money strategy_total_pnl = 33;
+  string pnl_source = 34;
+  string pnl_basis = 35;
+  Money pnl_diff_vs_account = 36;
+  optional int64 pnl_as_of_ts_ns = 37;
+  string session_phase = 38;
+  string strategy_window_id = 39;
+  optional int64 window_start_ts_ns = 40;
+  optional int64 window_end_ts_ns = 41;
+  string window_status = 42;
+  optional int64 next_transition_ts_ns = 43;
+  optional bool is_market_open = 44;
+  optional bool is_regular_session = 45;
+  optional bool is_opening_window = 46;
+  optional uint64 symbols_blocked = 47;
+  optional uint64 symbols_with_fresh_l1 = 48;
+  optional uint64 symbols_with_fresh_l2 = 49;
+  optional uint64 symbols_missing_md = 50;
+  optional uint64 l1_symbols_allocated = 51;
+  optional uint64 l2_capacity = 52;
+  optional uint64 l2_capacity_used = 53;
+  repeated string l2_denied_symbols = 54;
+  string lease_authority_version = 55;
 }
 
 message StrategyStateChanged {
@@ -204,6 +268,12 @@ message RiskDecisionMade {
   optional uint64 quote_staleness_ms = 18;
   optional bool short_permission = 19;
   string authority_policy_version = 20;
+  string risk_mode = 21;
+  optional bool limits_enforced = 22;
+  string limits_snapshot_id = 23;
+  optional uint64 risk_decision_seq = 24;
+  string risk_result = 25;
+  optional int64 evaluated_ts_ns = 26;
 }
 
 message OrderSubmitRequested {
@@ -235,6 +305,20 @@ message OrderSubmitRequested {
   optional int64 display_size = 26;
   Price discretionary_amount = 27;
   bool transmit = 28;
+  string broker_account_id = 29;
+  string broker_perm_id = 30;
+  optional int32 client_id = 31;
+  optional int64 intent_created_ts_ns = 32;
+  optional int64 risk_decision_ts_ns = 33;
+  optional int64 submit_requested_ts_ns = 34;
+  Price bbo_bid_at_submit = 35;
+  Price bbo_ask_at_submit = 36;
+  Price mid_at_submit = 37;
+  optional double spread_bps_at_submit = 38;
+  optional uint64 quote_age_ms_at_submit = 39;
+  optional double queue_position_estimate = 40;
+  optional double slippage_vs_mid_bps = 41;
+  optional double slippage_vs_decision_bps = 42;
 }
 
 message OrderSubmitted {
@@ -248,6 +332,12 @@ message OrderSubmitted {
   string route = 8;
   string exchange = 9;
   string destination = 10;
+  string broker_account_id = 11;
+  string broker_perm_id = 12;
+  optional int32 client_id = 13;
+  optional int64 order_submitted_ts_ns = 14;
+  Price bbo_bid_at_submit = 15;
+  Price bbo_ask_at_submit = 16;
 }
 
 message BrokerAckReceived {
@@ -259,6 +349,12 @@ message BrokerAckReceived {
   string perm_id = 6;
   optional int64 remaining_quantity = 7;
   optional int64 receive_ts_ns = 8;
+  string broker_account_id = 9;
+  string broker_perm_id = 10;
+  optional int64 broker_ack_ts_ns = 11;
+  Price bbo_bid_at_ack = 12;
+  Price bbo_ask_at_ack = 13;
+  optional uint64 quote_age_ms_at_ack = 14;
 }
 
 message OrderFill {
@@ -281,6 +377,20 @@ message OrderFill {
   optional int64 trade_ts_ns = 17;
   optional int64 report_ts_ns = 18;
   string settlement_currency = 19;
+  string symbol = 20;
+  OrderSide side = 21;
+  string exchange = 22;
+  Money realized_pnl_delta = 23;
+  optional int64 ingest_ts_ns = 24;
+  optional int64 position_after_fill = 25;
+  Price bbo_bid_at_fill = 26;
+  Price bbo_ask_at_fill = 27;
+  Price mid_at_fill = 28;
+  optional double spread_bps_at_fill = 29;
+  optional uint64 quote_age_ms_at_fill = 30;
+  optional double slippage_vs_mid_bps = 31;
+  optional double slippage_vs_arrival_bps = 32;
+  optional double slippage_vs_decision_bps = 33;
 }
 
 message Fee {
@@ -293,6 +403,7 @@ message CancelRequested {
   string account_id = 2;
   string order_id = 3;
   string reason = 4;
+  optional int64 cancel_requested_ts_ns = 5;
 }
 
 message CancelRejected {
@@ -300,12 +411,14 @@ message CancelRejected {
   string account_id = 2;
   string order_id = 3;
   string reason = 4;
+  optional int64 cancel_ack_ts_ns = 5;
 }
 
 message OrderCancelled {
   string correlation_id = 1;
   string account_id = 2;
   string order_id = 3;
+  optional int64 cancel_ack_ts_ns = 4;
 }
 
 message OrderRejected {
@@ -322,6 +435,18 @@ message PositionSnapshot {
   Price average_price = 4;
   Price market_price = 5;
   repeated StrategyPositionAttribution strategy_attribution = 6;
+  optional int64 open_buy_qty = 7;
+  optional int64 open_sell_qty = 8;
+  optional int64 pending_cancel_qty = 9;
+  Money reserved_buy_power = 10;
+  Money position_notional = 11;
+  Money gross_exposure = 12;
+  Money net_exposure = 13;
+  Money realized_pnl = 14;
+  Money unrealized_pnl = 15;
+  string mark_source = 16;
+  optional int64 mark_ts_ns = 17;
+  optional uint64 mark_age_ms = 18;
 }
 
 message RiskLimitBreached {
@@ -379,6 +504,12 @@ message CommandAuthorityDecided {
   int64 decided_ts_ns = 11;
   string authority_policy_version = 12;
   string target_environment = 13;
+  string session = 14;
+  optional int64 requested_at_ts_ns = 15;
+  optional bool risk_checked = 16;
+  optional bool dry_run = 17;
+  optional bool execute_broker = 18;
+  string approval_id = 19;
 }
 
 message CommandAuditRecorded {
@@ -388,4 +519,11 @@ message CommandAuditRecorded {
   string status = 4;
   string reason = 5;
   string target = 6;
+  string result_event_id = 7;
+  string error_code = 8;
+  string error_message = 9;
+  string rollback_command_id = 10;
+  optional bool execute_broker = 11;
+  optional bool dry_run = 12;
+  optional int64 requested_at_ts_ns = 13;
 }

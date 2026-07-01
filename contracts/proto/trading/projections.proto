@@ -83,6 +83,7 @@ message OverviewSnapshot {
   bool can_short = 70;
   bool can_open_long = 71;
   bool can_close_position = 72;
+  bool valuation_ok = 73;
 }
 
 message AccountRuntimeControls {
@@ -125,12 +126,54 @@ message StrategySnapshot {
   uint64 trades_today = 30;
   uint64 max_trades_today = 31;
   double daily_loss_used_pct = 32;
+  uint64 signals_total_today = 33;
+  uint64 signals_last_1m = 34;
+  uint64 intents_total_today = 35;
+  uint64 orders_total_today = 36;
+  uint64 fills_total_today = 37;
+  uint64 partial_fills_today = 38;
+  uint64 cancels_total_today = 39;
+  uint64 rejects_total_today = 40;
+  Money strategy_realized_pnl = 41;
+  Money strategy_unrealized_pnl = 42;
+  Money strategy_total_pnl = 43;
+  string pnl_source = 44;
+  string pnl_basis = 45;
+  Money pnl_diff_vs_account = 46;
+  optional int64 pnl_as_of_ts_ns = 47;
+  string session_phase = 48;
+  string strategy_window_id = 49;
+  optional int64 window_start_ts_ns = 50;
+  optional int64 window_end_ts_ns = 51;
+  string window_status = 52;
+  optional int64 next_transition_ts_ns = 53;
+  bool is_market_open = 54;
+  bool is_regular_session = 55;
+  bool is_opening_window = 56;
+  uint64 symbols_blocked = 57;
+  uint64 symbols_with_fresh_l1 = 58;
+  uint64 symbols_with_fresh_l2 = 59;
+  uint64 symbols_missing_md = 60;
+  uint64 l1_symbols_allocated = 61;
+  uint64 l2_capacity = 62;
+  uint64 l2_capacity_used = 63;
+  repeated string l2_denied_symbols = 64;
+  string lease_authority_version = 65;
 }
 
 message StrategyRiskGate {
   string name = 1;
   bool passed = 2;
   string detail = 3;
+  string scope = 4;
+  string observed = 5;
+  string limit = 6;
+  string status = 7;
+  string severity = 8;
+  string reason = 9;
+  string policy_version = 10;
+  optional uint64 source_seq = 11;
+  optional int64 evaluated_ts_ns = 12;
 }
 
 message OrderTimelineEntry {
@@ -138,6 +181,11 @@ message OrderTimelineEntry {
   int64 ts_ns = 2;
   string kind = 3;
   string summary = 4;
+}
+
+message FeeProjection {
+  string name = 1;
+  Money amount = 2;
 }
 
 message OrderFillProjection {
@@ -154,6 +202,13 @@ message OrderFillProjection {
   optional int64 fill_ts_ns = 11;
   optional int64 report_ts_ns = 12;
   optional int64 position_after_fill = 13;
+  string order_id = 14;
+  string symbol = 15;
+  string side = 16;
+  string exchange = 17;
+  Money realized_pnl_delta = 18;
+  optional int64 ingest_ts_ns = 19;
+  repeated FeeProjection fee_details = 20;
 }
 
 message OrderRiskProjection {
@@ -163,6 +218,9 @@ message OrderRiskProjection {
   string decision_id = 4;
   string risk_snapshot_id = 5;
   string authority_policy_version = 6;
+  optional uint64 risk_decision_seq = 7;
+  string risk_result = 8;
+  string limits_snapshot_id = 9;
 }
 
 message OrderTimeline {
@@ -204,6 +262,36 @@ message OrderTimeline {
   optional int64 min_qty = 33;
   repeated OrderFillProjection fills = 34;
   OrderRiskProjection risk = 35;
+  optional int64 intent_created_ts_ns = 36;
+  optional int64 risk_decision_ts_ns = 37;
+  optional int64 submit_requested_ts_ns = 38;
+  optional int64 order_submitted_ts_ns = 39;
+  optional int64 broker_ack_ts_ns = 40;
+  optional int64 cancel_requested_ts_ns = 41;
+  optional int64 cancel_ack_ts_ns = 42;
+  string broker_account_id = 43;
+  string broker_perm_id = 44;
+  optional int32 broker_client_id = 45;
+  optional int64 total_qty = 46;
+  string remaining_reason = 47;
+  Price bbo_bid_at_signal = 48;
+  Price bbo_ask_at_signal = 49;
+  Price bbo_bid_at_intent = 50;
+  Price bbo_ask_at_intent = 51;
+  Price bbo_bid_at_submit = 52;
+  Price bbo_ask_at_submit = 53;
+  Price bbo_bid_at_ack = 54;
+  Price bbo_ask_at_ack = 55;
+  Price bbo_bid_at_fill = 56;
+  Price bbo_ask_at_fill = 57;
+  Price mid_at_submit = 58;
+  optional double spread_bps_at_submit = 59;
+  optional uint64 quote_age_ms_at_submit = 60;
+  optional double queue_position_estimate = 61;
+  optional double slippage_vs_mid_bps = 62;
+  optional double slippage_vs_arrival_bps = 63;
+  optional double slippage_vs_decision_bps = 64;
+  string causal_chain_summary = 65;
 }
 
 message PositionProjection {
@@ -214,6 +302,17 @@ message PositionProjection {
   Price market_price = 5;
   double unrealized_pnl = 6;
   repeated StrategyPositionAttribution strategy_attribution = 7;
+  optional int64 open_buy_qty = 8;
+  optional int64 open_sell_qty = 9;
+  optional int64 pending_cancel_qty = 10;
+  Money reserved_buy_power = 11;
+  Money position_notional = 12;
+  Money gross_exposure = 13;
+  Money net_exposure = 14;
+  Money realized_pnl = 15;
+  string mark_source = 16;
+  optional int64 mark_ts_ns = 17;
+  optional uint64 mark_age_ms = 18;
 }
 
 message MarketDataSummaryProjection {
@@ -247,6 +346,11 @@ message RiskBlock {
   bool blocks_cancel = 14;
   bool blocks_short = 15;
   bool blocks_command = 16;
+  optional uint64 last_seen_seq = 17;
+  string scope_type = 18;
+  string scope_id = 19;
+  string reason_code = 20;
+  string reason_text = 21;
 }
 
 message RiskLimitView {
@@ -258,6 +362,11 @@ message RiskLimitView {
   string unit = 6;
   string status = 7;
   int64 updated_ts_ns = 8;
+  string severity = 9;
+  string reason = 10;
+  string policy_version = 11;
+  optional uint64 source_seq = 12;
+  optional int64 evaluated_ts_ns = 13;
 }
 
 message RiskSnapshot {
@@ -270,6 +379,8 @@ message RiskSnapshot {
   bool short_permission = 7;
   repeated RiskBlock active_blocks = 8;
   repeated RiskLimitView structured_limits = 9;
+  string risk_mode = 10;
+  bool limits_enforced = 11;
 }
 
 message AlertProjection {
@@ -300,6 +411,16 @@ message CommandEvidenceProjection {
   optional int64 decided_ts_ns = 15;
   string authority_policy_version = 16;
   string target_environment = 17;
+  string session = 18;
+  optional int64 requested_at_ts_ns = 19;
+  optional bool risk_checked = 20;
+  optional bool dry_run = 21;
+  optional bool execute_broker = 22;
+  string status = 23;
+  string result_event_id = 24;
+  string error_code = 25;
+  string error_message = 26;
+  string rollback_command_id = 27;
 }
 
 message TerminalProjectionSnapshot {
@@ -316,6 +437,41 @@ message TerminalProjectionSnapshot {
   repeated OverviewSnapshot accounts = 11;
   repeated CommandEvidenceProjection commands = 12;
   repeated MarketDataSummaryProjection market_data = 13;
+  string runtime_mode = 14;
+  string projection_source = 15;
+  optional uint64 projection_as_of_seq = 16;
+  optional int64 projection_as_of_ts_ns = 17;
+  optional uint64 last_event_age_ms = 18;
+  bool nats_connected = 19;
+  optional uint64 nats_consumer_lag = 20;
+  optional uint64 stream_lag = 21;
+  optional double event_ingest_rate = 22;
+  optional double projection_update_rate = 23;
+  optional double ui_render_rate = 24;
+  optional uint64 snapshot_age_ms = 25;
+  uint64 events_ingested_live = 26;
+  uint64 events_loaded_replay = 27;
+  uint64 events_loaded_snapshot = 28;
+  uint64 events_coalesced_ui = 29;
+  string replay_id = 30;
+  string replay_source_stream = 31;
+  optional uint64 replay_from_seq = 32;
+  optional uint64 replay_to_seq = 33;
+  optional int64 replay_from_ts_ns = 34;
+  optional int64 replay_to_ts_ns = 35;
+  string replay_filter = 36;
+  uint64 replay_events_loaded = 37;
+  uint64 replay_events_skipped = 38;
+  uint64 replay_events_deduped = 39;
+  uint64 replay_gaps_detected = 40;
+  uint64 replay_orders_rebuilt = 41;
+  uint64 replay_positions_rebuilt = 42;
+  uint64 replay_accounts_rebuilt = 43;
+  string projection_checksum = 44;
+  string live_checksum = 45;
+  string determinism_status = 46;
+  uint64 divergence_count = 47;
+  string replay_match_live = 48;
 }
 
 message EventFilter {

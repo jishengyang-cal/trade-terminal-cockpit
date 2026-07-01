@@ -212,6 +212,7 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
         kv("net_liq", &selected_account.net_liquidation.to_string()),
         kv("avail", &selected_account.available_funds.to_string()),
         kv("valuation", &selected_account.valuation_status),
+        kv("valuation_ok", mark(selected_account.valuation_ok)),
         kv(
             "as_of_seq",
             &selected_account
@@ -239,6 +240,25 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .valuation_incomplete_reason
                 .as_deref()
                 .unwrap_or("-"),
+        ),
+        kv(
+            "cash_src",
+            selected_account.cash_source.as_deref().unwrap_or("-"),
+        ),
+        kv(
+            "bp_src",
+            selected_account
+                .buying_power_source
+                .as_deref()
+                .unwrap_or("-"),
+        ),
+        kv(
+            "netliq_src",
+            selected_account.net_liq_source.as_deref().unwrap_or("-"),
+        ),
+        kv(
+            "pnl_src",
+            selected_account.day_pnl_source.as_deref().unwrap_or("-"),
         ),
         kv(
             "maint_mgn",
@@ -465,6 +485,18 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     chain.broker_order_id.as_deref().unwrap_or("-"),
                 ),
                 kv_wide("perm_id", chain.perm_id.as_deref().unwrap_or("-")),
+                kv_wide(
+                    "broker_perm_id",
+                    chain.broker_perm_id.as_deref().unwrap_or("-"),
+                ),
+                kv_wide(
+                    "broker_account_id",
+                    chain.broker_account_id.as_deref().unwrap_or("-"),
+                ),
+                kv_wide(
+                    "broker_client_id",
+                    &format_optional_i32(chain.broker_client_id),
+                ),
                 kv_wide("order_ref", chain.order_ref.as_deref().unwrap_or("-")),
                 kv_wide(
                     "strategy_order_ref",
@@ -511,6 +543,10 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 ),
                 kv_wide("quantity_status", chain.quantity_status()),
                 kv_wide(
+                    "remaining_reason",
+                    chain.remaining_reason.as_deref().unwrap_or("-"),
+                ),
+                kv_wide(
                     "display_qty",
                     &chain
                         .display_qty
@@ -531,6 +567,34 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 kv_wide(
                     "last_fill",
                     &format_optional_price(chain.last_fill_price.as_ref()),
+                ),
+                kv_wide(
+                    "intent_created_ts_ns",
+                    &format_optional_i64(chain.intent_created_ts_ns),
+                ),
+                kv_wide(
+                    "risk_decision_ts_ns",
+                    &format_optional_i64(chain.risk_decision_ts_ns),
+                ),
+                kv_wide(
+                    "submit_requested_ts_ns",
+                    &format_optional_i64(chain.submit_requested_ts_ns),
+                ),
+                kv_wide(
+                    "order_submitted_ts_ns",
+                    &format_optional_i64(chain.order_submitted_ts_ns),
+                ),
+                kv_wide(
+                    "broker_ack_ts_ns",
+                    &format_optional_i64(chain.broker_ack_ts_ns),
+                ),
+                kv_wide(
+                    "cancel_requested_ts_ns",
+                    &format_optional_i64(chain.cancel_requested_ts_ns),
+                ),
+                kv_wide(
+                    "cancel_ack_ts_ns",
+                    &format_optional_i64(chain.cancel_ack_ts_ns),
                 ),
                 kv_wide(
                     "submit_ts_ns",
@@ -561,6 +625,18 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                         .unwrap_or_else(|| "-".to_string()),
                 ),
                 kv_wide(
+                    "intent_to_risk_ms",
+                    &format_optional_u64(chain.latency.intent_to_risk_ms),
+                ),
+                kv_wide(
+                    "risk_to_submit_req_ms",
+                    &format_optional_u64(chain.latency.risk_to_submit_req_ms),
+                ),
+                kv_wide(
+                    "submit_req_to_submitted_ms",
+                    &format_optional_u64(chain.latency.submit_req_to_submitted_ms),
+                ),
+                kv_wide(
                     "submit_to_ack_ms",
                     &chain
                         .latency
@@ -583,6 +659,60 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                         .submit_to_terminal_ms
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_wide(
+                    "submit_to_first_fill_ms",
+                    &format_optional_u64(chain.latency.submit_to_first_fill_ms),
+                ),
+                kv_wide(
+                    "cancel_to_ack_ms",
+                    &format_optional_u64(chain.latency.cancel_to_ack_ms),
+                ),
+                kv_wide(
+                    "partial_to_full_fill_ms",
+                    &format_optional_u64(chain.latency.partial_to_full_fill_ms),
+                ),
+                kv_wide(
+                    "submit_bbo",
+                    &format_bid_ask(
+                        chain.bbo_bid_at_submit.as_ref(),
+                        chain.bbo_ask_at_submit.as_ref(),
+                    ),
+                ),
+                kv_wide(
+                    "ack_bbo",
+                    &format_bid_ask(chain.bbo_bid_at_ack.as_ref(), chain.bbo_ask_at_ack.as_ref()),
+                ),
+                kv_wide(
+                    "fill_bbo",
+                    &format_bid_ask(
+                        chain.bbo_bid_at_fill.as_ref(),
+                        chain.bbo_ask_at_fill.as_ref(),
+                    ),
+                ),
+                kv_wide(
+                    "mid_at_submit",
+                    &format_optional_price(chain.mid_at_submit.as_ref()),
+                ),
+                kv_wide(
+                    "spread_bps_submit",
+                    &format_optional_f64(chain.spread_bps_at_submit),
+                ),
+                kv_wide(
+                    "quote_age_submit",
+                    &format_optional_u64(chain.quote_age_ms_at_submit),
+                ),
+                kv_wide(
+                    "slippage_mid_bps",
+                    &format_optional_f64(chain.slippage_vs_mid_bps),
+                ),
+                kv_wide(
+                    "slippage_arrival_bps",
+                    &format_optional_f64(chain.slippage_vs_arrival_bps),
+                ),
+                kv_wide(
+                    "slippage_decision_bps",
+                    &format_optional_f64(chain.slippage_vs_decision_bps),
                 ),
                 kv_wide("anomalies", &anomalies),
                 kv_wide(
@@ -630,17 +760,18 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
             if !chain.fills.is_empty() {
                 lines.push("Fill Detail".to_string());
                 lines.push(format!(
-                    "{:<16} {:>6} {:>12} {:<8} {:<5} {:>10} {}",
-                    "EXEC_ID", "QTY", "PX", "VENUE", "LIQ", "COMM", "TS_NS"
+                    "{:<16} {:>6} {:>12} {:<6} {:<5} {:<8} {:>10} {}",
+                    "EXEC_ID", "QTY", "PX", "SIDE", "EXCH", "VENUE", "COMM", "TS_NS"
                 ));
                 for fill in &chain.fills {
                     lines.push(format!(
-                        "{:<16} {:>6} {:>12} {:<8} {:<5} {:>10} {}",
+                        "{:<16} {:>6} {:>12} {:<6} {:<5} {:<8} {:>10} {}",
                         truncate(fill.exec_id.as_deref().unwrap_or("-"), 16),
                         fill.qty,
                         truncate(&fill.price.to_string(), 12),
+                        truncate(fill.side.as_deref().unwrap_or("-"), 6),
+                        truncate(fill.exchange.as_deref().unwrap_or("-"), 5),
                         truncate(fill.venue.as_deref().unwrap_or("-"), 8),
-                        truncate(fill.liquidity_flag.as_deref().unwrap_or("-"), 5),
                         truncate(
                             &fill
                                 .commission
@@ -653,6 +784,25 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "-".to_string())
                     ));
+                    if fill.realized_pnl_delta.is_some()
+                        || fill.position_after_fill.is_some()
+                        || !fill.fee_details.is_empty()
+                    {
+                        lines.push(format!(
+                            "  realized_delta={} pos_after={} fees={}",
+                            format_optional_money(fill.realized_pnl_delta.as_ref()),
+                            format_optional_i64(fill.position_after_fill),
+                            if fill.fee_details.is_empty() {
+                                "-".to_string()
+                            } else {
+                                fill.fee_details
+                                    .iter()
+                                    .map(|fee| format!("{}={}", fee.name, fee.amount))
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            }
+                        ));
+                    }
                 }
                 lines.push(String::new());
             }
@@ -764,6 +914,14 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
         kv_wide("accounts_connected", mark(state.account.broker_connected)),
         kv_wide("market_data_fresh", mark(state.risk.market_data_fresh)),
         kv_wide("order_channel_ok", mark(state.risk.broker_order_channel_ok)),
+        kv_wide(
+            "risk_mode",
+            state.risk.risk_mode.as_deref().unwrap_or("UNKNOWN"),
+        ),
+        kv_wide(
+            "limits_enforced",
+            &format_optional_bool(state.risk.limits_enforced),
+        ),
         kv_wide("day_loss_ok", mark(!state.risk.day_max_loss_breached)),
         kv_wide("quote_stale_ok", mark(state.risk.quote_staleness_ok)),
         kv_wide(
@@ -905,15 +1063,19 @@ fn render_risk(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         for block in &state.risk.active_blocks {
             blocks.push(format!(
-                "{} / {} / {} / {} / submit:{} cancel:{} short:{} cmd:{} / {}",
+                "{} / {} / {} / {} / seq:{} / submit:{} cancel:{} short:{} cmd:{} / {}",
                 block.scope,
-                block.rule_id,
+                block.reason_code.as_deref().unwrap_or(&block.rule_id),
                 block.severity,
                 if block.source.is_empty() {
                     "-"
                 } else {
                     &block.source
                 },
+                block
+                    .last_seen_seq
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
                 mark(block.blocks_order_submit),
                 mark(block.blocks_cancel),
                 mark(block.blocks_short),
@@ -1115,14 +1277,25 @@ fn render_commands(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 || command.target_environment.is_some()
             {
                 lines.push(format!(
-                    "  auth_chain   decision={} capability={} decided_ts={} env={}",
+                    "  auth_chain   decision={} capability={} decided_ts={} env={} session={}",
                     command.authority_decision_id.as_deref().unwrap_or("-"),
                     command.capability.as_deref().unwrap_or("-"),
                     command
                         .decided_ts_ns
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "-".to_string()),
-                    command.target_environment.as_deref().unwrap_or("-")
+                    command.target_environment.as_deref().unwrap_or("-"),
+                    command.session.as_deref().unwrap_or("-")
+                ));
+                lines.push(format!(
+                    "  exec_chain   risk_checked={} dry_run={} execute_broker={} result={} error={}:{} rollback={}",
+                    format_optional_bool(command.risk_checked),
+                    format_optional_bool(command.dry_run),
+                    format_optional_bool(command.execute_broker),
+                    command.result_event_id.as_deref().unwrap_or("-"),
+                    command.error_code.as_deref().unwrap_or("-"),
+                    command.error_message.as_deref().unwrap_or("-"),
+                    command.rollback_command_id.as_deref().unwrap_or("-")
                 ));
             }
         }
@@ -1349,8 +1522,22 @@ fn event_detail_lines(state: &AppState, event: &EventSummary, query: &str) -> Ve
         "checksum",
         event.checksum.as_deref().unwrap_or("MISSING"),
     ));
-    lines.push(kv_narrow("prev_hash", "MISSING"));
-    lines.push(kv_narrow("event_hash", "MISSING"));
+    lines.push(kv_narrow(
+        "prev_hash",
+        event.prev_event_hash.as_deref().unwrap_or("MISSING"),
+    ));
+    lines.push(kv_narrow(
+        "event_hash",
+        event.event_hash.as_deref().unwrap_or("MISSING"),
+    ));
+    lines.push(kv_narrow(
+        "aggregate_hash",
+        event.aggregate_hash.as_deref().unwrap_or("MISSING"),
+    ));
+    lines.push(kv_narrow(
+        "projection_version",
+        event.projection_version.as_deref().unwrap_or("MISSING"),
+    ));
 
     if !query.trim().is_empty() {
         lines.push(String::new());
@@ -1743,6 +1930,43 @@ fn format_optional_u64(value: Option<u64>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_i64(value: Option<i64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_i32(value: Option<i32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_f64(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.4}"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "UNKNOWN".to_string())
+}
+
+fn format_optional_money(money: Option<&trade_core::Money>) -> String {
+    money
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_bid_ask(bid: Option<&trade_core::Price>, ask: Option<&trade_core::Price>) -> String {
+    match (bid, ask) {
+        (Some(bid), Some(ask)) => format!("{} / {}", bid.display_value(), ask.display_value()),
+        _ => "-".to_string(),
+    }
 }
 
 fn format_optional_path(value: Option<&PathBuf>) -> String {

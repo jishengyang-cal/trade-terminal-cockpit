@@ -22,7 +22,7 @@
     "day_pnl": 12.34,
     "realized_pnl": 0.0,
     "unrealized_pnl": 12.34,
-    "net_liquidation": 10012.50,
+    "net_liquidation": 10012.5,
     "available_funds": 20000.0,
     "exposure_pct": 5.0,
     "margin_usage_pct": 1.0,
@@ -49,7 +49,10 @@
     "can_liquidate": true,
     "can_short": false,
     "can_open_long": true,
-    "can_close_position": true
+    "can_close_position": true,
+    "valuation_ok": true,
+    "valuation_stale": false,
+    "valuation_incomplete_reason": null
   },
   "strategies": [
     {
@@ -77,19 +80,79 @@
         {
           "name": "market_open_window",
           "passed": true,
-          "detail": "regular session"
+          "detail": "regular session",
+          "scope": "open-scalp",
+          "observed": "regular session",
+          "limit": "allowed",
+          "status": "PASS",
+          "severity": "INFO",
+          "reason": "regular session",
+          "policy_version": "risk-policy-fixture-v1",
+          "source_seq": 41,
+          "evaluated_ts_ns": 41000
         },
         {
           "name": "quote_freshness",
           "passed": true,
-          "detail": "83ms"
+          "detail": "83ms",
+          "scope": "open-scalp",
+          "observed": "83ms",
+          "limit": "500ms",
+          "status": "PASS",
+          "severity": "INFO",
+          "reason": "83ms",
+          "policy_version": "risk-policy-fixture-v1",
+          "source_seq": 41,
+          "evaluated_ts_ns": 41000
         },
         {
           "name": "short_permission",
           "passed": false,
-          "detail": "account is long-only"
+          "detail": "account is long-only",
+          "scope": "open-scalp",
+          "observed": "account is long-only",
+          "limit": "500ms",
+          "status": "WARN",
+          "severity": "SOFT_WARN",
+          "reason": "account is long-only",
+          "policy_version": "risk-policy-fixture-v1",
+          "source_seq": 41,
+          "evaluated_ts_ns": 41000
         }
-      ]
+      ],
+      "signals_total_today": 120,
+      "signals_last_1m": 16,
+      "intents_total_today": 4,
+      "orders_total_today": 1,
+      "fills_total_today": 1,
+      "partial_fills_today": 1,
+      "cancels_total_today": 0,
+      "rejects_total_today": 0,
+      "strategy_realized_pnl": 0.0,
+      "strategy_unrealized_pnl": 12.5,
+      "strategy_total_pnl": 12.5,
+      "pnl_source": "internal_position_mark",
+      "pnl_basis": "mark_to_last",
+      "pnl_diff_vs_account": 0.0,
+      "pnl_as_of_ts_ns": 41000,
+      "session_phase": "ContinuousTrading",
+      "strategy_window_id": "open-scalp-0932-0940",
+      "window_start_ts_ns": 32000,
+      "window_end_ts_ns": 40000,
+      "window_status": "MANAGE_ONLY",
+      "next_transition_ts_ns": 40000,
+      "is_market_open": true,
+      "is_regular_session": true,
+      "is_opening_window": true,
+      "symbols_blocked": 0,
+      "symbols_with_fresh_l1": 80,
+      "symbols_with_fresh_l2": 5,
+      "symbols_missing_md": 0,
+      "l1_symbols_allocated": 80,
+      "l2_capacity": 5,
+      "l2_capacity_used": 5,
+      "l2_denied_symbols": [],
+      "lease_authority_version": "resource-lease-fixture-v1"
     }
   ],
   "orders": [
@@ -120,10 +183,19 @@
       "min_qty": 1,
       "risk": {
         "approved": true,
-        "reason_codes": ["quote_fresh=17ms", "max_loss_ok"],
+        "reason_codes": [
+          "quote_fresh=17ms",
+          "max_loss_ok"
+        ],
         "decision_id": "risk-decision-snapshot-001",
         "risk_snapshot_id": "risk-snapshot-fixture-001",
-        "authority_policy_version": "risk-policy-fixture-v1"
+        "authority_policy_version": "risk-policy-fixture-v1",
+        "severity": "INFO",
+        "risk_decision_seq": 37,
+        "risk_result": "PASS",
+        "limits_snapshot_id": "limits-fixture-001",
+        "risk_mode": "fixture",
+        "limits_enforced": false
       },
       "filled_quantity": 50,
       "average_fill_price": 123.45,
@@ -143,7 +215,19 @@
           "fees": [],
           "currency": "USD",
           "fill_ts_ns": 41000,
-          "position_after_fill": 50
+          "position_after_fill": 50,
+          "order_id": "ord-snapshot-001",
+          "symbol": "MU",
+          "side": "BUY",
+          "exchange": "SIM",
+          "realized_pnl_delta": 0.0,
+          "ingest_ts_ns": 41010,
+          "fee_details": [
+            {
+              "name": "commission",
+              "amount": 0.0
+            }
+          ]
         }
       ],
       "timeline": [
@@ -153,7 +237,51 @@
           "kind": "PARTIAL_FILL",
           "summary": "50 @ 123.4500"
         }
-      ]
+      ],
+      "broker_account_id": "paper-snapshot+paper",
+      "broker_perm_id": "perm-snapshot-9182",
+      "broker_client_id": 80,
+      "total_qty": 100,
+      "remaining_reason": null,
+      "intent_created_ts_ns": 36000,
+      "risk_decision_ts_ns": 37000,
+      "submit_requested_ts_ns": 38000,
+      "order_submitted_ts_ns": 38500,
+      "broker_ack_ts_ns": 39000,
+      "submit_ts_ns": 38000,
+      "ack_ts_ns": 39000,
+      "bbo_bid_at_signal": 123.44,
+      "bbo_ask_at_signal": 123.45,
+      "bbo_bid_at_intent": 123.44,
+      "bbo_ask_at_intent": 123.45,
+      "bbo_bid_at_submit": 123.44,
+      "bbo_ask_at_submit": 123.45,
+      "bbo_bid_at_ack": 123.44,
+      "bbo_ask_at_ack": 123.45,
+      "bbo_bid_at_fill": 123.44,
+      "bbo_ask_at_fill": 123.45,
+      "mid_at_submit": 123.445,
+      "spread_bps_at_submit": 0.81,
+      "quote_age_ms_at_submit": 83,
+      "queue_position_estimate": 0.42,
+      "slippage_vs_mid_bps": 0.41,
+      "slippage_vs_arrival_bps": 0.41,
+      "slippage_vs_decision_bps": 0.0,
+      "latency": {
+        "signal_to_intent_ms": 1,
+        "intent_to_risk_ms": 1,
+        "risk_to_submit_ms": 1,
+        "risk_to_submit_req_ms": 1,
+        "submit_req_to_submitted_ms": 0,
+        "submit_to_ack_ms": 1,
+        "submitted_to_ack_ms": 0,
+        "ack_to_first_fill_ms": 2,
+        "submit_to_first_fill_ms": 3,
+        "submit_to_terminal_ms": null,
+        "cancel_to_ack_ms": null,
+        "partial_to_full_fill_ms": null
+      },
+      "causal_chain_summary": "Signal -> Intent -> Risk -> SubmitReq -> Submitted -> Ack -> PartialFill"
     }
   ],
   "positions": [
@@ -163,14 +291,34 @@
       "symbol": "MU",
       "net_quantity": 50,
       "average_price": 123.45,
-      "market_price": 123.70,
-      "unrealized_pnl": 12.50,
+      "market_price": 123.7,
+      "unrealized_pnl": 12.5,
       "strategy_attribution": [
         {
           "strategy_id": "open-scalp",
-          "quantity": 50
+          "quantity": 50,
+          "avg_cost": 123.45,
+          "realized_pnl": 0.0,
+          "unrealized_pnl": 12.5,
+          "fees": [
+            0.0
+          ],
+          "attribution_method": "strategy_quantity_fifo",
+          "attribution_version": "fixture-v1",
+          "avg_cost_ts_ns": 41000
         }
-      ]
+      ],
+      "open_buy_qty": 50,
+      "open_sell_qty": 0,
+      "pending_cancel_qty": 0,
+      "reserved_buy_power": 6172.5,
+      "position_notional": 6185.0,
+      "gross_exposure": 6185.0,
+      "net_exposure": 6185.0,
+      "realized_pnl": 0.0,
+      "mark_source": "broker_sim_last",
+      "mark_ts_ns": 41000,
+      "mark_age_ms": 83
     }
   ],
   "risk": {
@@ -188,7 +336,26 @@
       "max_trades_per_symbol_day": "3",
       "strategy_max_consecutive_stop": "3"
     },
-    "active_blocks": []
+    "active_blocks": [],
+    "risk_mode": "fixture",
+    "limits_enforced": false,
+    "structured_limits": [
+      {
+        "rule_id": "position_notional",
+        "scope": "paper-snapshot/MU",
+        "metric": "position_notional",
+        "observed": "6185.00",
+        "limit": "3000.00",
+        "unit": "USD",
+        "status": "informational",
+        "updated_ts_ns": 41000,
+        "severity": "INFO",
+        "reason": "fixture limits_enforced=false",
+        "policy_version": "risk-policy-fixture-v1",
+        "source_seq": 41,
+        "evaluated_ts_ns": 41000
+      }
+    ]
   },
   "alerts": [
     {
@@ -199,6 +366,21 @@
       "acknowledged": false,
       "acknowledged_by": null,
       "acknowledge_reason": null
+    }
+  ],
+  "market_data": [
+    {
+      "symbol": "MU",
+      "source": "fixture",
+      "bid_price": 123.44,
+      "ask_price": 123.45,
+      "spread_bps": 0.81,
+      "imbalance": 0.12,
+      "microprice": 123.445,
+      "quote_age_ms": 83,
+      "event_rate_per_sec": 17.0,
+      "wall_size": 750000,
+      "summary_ts_ns": 41000
     }
   ]
 }

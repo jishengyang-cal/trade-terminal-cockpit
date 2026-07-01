@@ -106,13 +106,16 @@ pub fn sample_events() -> Vec<EventEnvelope> {
                     name: "quote_freshness".to_string(),
                     passed: true,
                     detail: "17ms".to_string(),
+                    ..Default::default()
                 },
                 StrategyRiskGateProjection {
                     name: "short_permission".to_string(),
                     passed: false,
                     detail: "short intents blocked".to_string(),
+                    ..Default::default()
                 },
             ],
+            ..Default::default()
         })),
         next(DomainEvent::SignalGenerated(SignalGenerated {
             correlation_id: correlation_id.to_string(),
@@ -145,6 +148,7 @@ pub fn sample_events() -> Vec<EventEnvelope> {
                 observed: "17".to_string(),
                 threshold: "500".to_string(),
                 unit: "ms".to_string(),
+                ..Default::default()
             }],
             ..Default::default()
         })),
@@ -203,6 +207,7 @@ pub fn sample_events() -> Vec<EventEnvelope> {
             strategy_attribution: vec![StrategyPositionAttribution {
                 strategy_id: "open-scalp".to_string(),
                 quantity: 100,
+                ..Default::default()
             }],
             ..Default::default()
         })),

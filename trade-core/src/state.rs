@@ -251,6 +251,8 @@ pub struct AccountView {
     #[serde(default = "default_valuation_status")]
     pub valuation_status: String,
     #[serde(default)]
+    pub valuation_ok: bool,
+    #[serde(default)]
     pub valuation_stale: bool,
     #[serde(default)]
     pub valuation_incomplete_reason: Option<String>,
@@ -350,6 +352,7 @@ impl AccountView {
             account_snapshot_ts_ns: None,
             account_snapshot_age_ms: None,
             valuation_status: default_valuation_status(),
+            valuation_ok: false,
             valuation_stale: false,
             valuation_incomplete_reason: Some("no valuation snapshot".to_string()),
             cash_source: None,
@@ -501,6 +504,7 @@ impl AccountView {
         } else {
             "PARTIAL".to_string()
         };
+        self.valuation_ok = self.valuation_status == "COMPLETE";
         self.valuation_incomplete_reason = if missing.is_empty() {
             None
         } else {
@@ -1174,6 +1178,28 @@ pub struct CommandEvidenceView {
     pub decided_ts_ns: Option<i64>,
     pub authority_policy_version: Option<String>,
     pub target_environment: Option<String>,
+    #[serde(default)]
+    pub session: Option<String>,
+    #[serde(default)]
+    pub requested_at_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub risk_checked: Option<bool>,
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    #[serde(default)]
+    pub execute_broker: Option<bool>,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub result_event_id: Option<String>,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    #[serde(default)]
+    pub error_message: Option<String>,
+    #[serde(default)]
+    pub rollback_command_id: Option<String>,
 }
 
 impl CommandEvidenceView {
@@ -1196,6 +1222,17 @@ impl CommandEvidenceView {
             decided_ts_ns: None,
             authority_policy_version: None,
             target_environment: None,
+            session: None,
+            requested_at_ts_ns: None,
+            risk_checked: None,
+            dry_run: None,
+            execute_broker: None,
+            approval_id: None,
+            status: None,
+            result_event_id: None,
+            error_code: None,
+            error_message: None,
+            rollback_command_id: None,
         }
     }
 }
@@ -1272,6 +1309,72 @@ pub struct StrategyView {
     pub max_trades_today: u64,
     #[serde(default)]
     pub daily_loss_used_pct: f64,
+    #[serde(default)]
+    pub signals_total_today: u64,
+    #[serde(default)]
+    pub signals_last_1m: u64,
+    #[serde(default)]
+    pub intents_total_today: u64,
+    #[serde(default)]
+    pub orders_total_today: u64,
+    #[serde(default)]
+    pub fills_total_today: u64,
+    #[serde(default)]
+    pub partial_fills_today: u64,
+    #[serde(default)]
+    pub cancels_total_today: u64,
+    #[serde(default)]
+    pub rejects_total_today: u64,
+    #[serde(default)]
+    pub strategy_realized_pnl: Option<Money>,
+    #[serde(default)]
+    pub strategy_unrealized_pnl: Option<Money>,
+    #[serde(default)]
+    pub strategy_total_pnl: Option<Money>,
+    #[serde(default)]
+    pub pnl_source: Option<String>,
+    #[serde(default)]
+    pub pnl_basis: Option<String>,
+    #[serde(default)]
+    pub pnl_diff_vs_account: Option<Money>,
+    #[serde(default)]
+    pub pnl_as_of_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub session_phase: Option<String>,
+    #[serde(default)]
+    pub strategy_window_id: Option<String>,
+    #[serde(default)]
+    pub window_start_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub window_end_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub window_status: Option<String>,
+    #[serde(default)]
+    pub next_transition_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub is_market_open: Option<bool>,
+    #[serde(default)]
+    pub is_regular_session: Option<bool>,
+    #[serde(default)]
+    pub is_opening_window: Option<bool>,
+    #[serde(default)]
+    pub symbols_blocked: u64,
+    #[serde(default)]
+    pub symbols_with_fresh_l1: u64,
+    #[serde(default)]
+    pub symbols_with_fresh_l2: u64,
+    #[serde(default)]
+    pub symbols_missing_md: u64,
+    #[serde(default)]
+    pub l1_symbols_allocated: u64,
+    #[serde(default)]
+    pub l2_capacity: u64,
+    #[serde(default)]
+    pub l2_capacity_used: u64,
+    #[serde(default)]
+    pub l2_denied_symbols: Vec<String>,
+    #[serde(default)]
+    pub lease_authority_version: Option<String>,
 }
 
 impl StrategyView {
@@ -1311,6 +1414,39 @@ impl StrategyView {
             trades_today: 0,
             max_trades_today: 0,
             daily_loss_used_pct: 0.0,
+            signals_total_today: 0,
+            signals_last_1m: 0,
+            intents_total_today: 0,
+            orders_total_today: 0,
+            fills_total_today: 0,
+            partial_fills_today: 0,
+            cancels_total_today: 0,
+            rejects_total_today: 0,
+            strategy_realized_pnl: None,
+            strategy_unrealized_pnl: None,
+            strategy_total_pnl: None,
+            pnl_source: None,
+            pnl_basis: None,
+            pnl_diff_vs_account: None,
+            pnl_as_of_ts_ns: None,
+            session_phase: None,
+            strategy_window_id: None,
+            window_start_ts_ns: None,
+            window_end_ts_ns: None,
+            window_status: None,
+            next_transition_ts_ns: None,
+            is_market_open: None,
+            is_regular_session: None,
+            is_opening_window: None,
+            symbols_blocked: 0,
+            symbols_with_fresh_l1: 0,
+            symbols_with_fresh_l2: 0,
+            symbols_missing_md: 0,
+            l1_symbols_allocated: 0,
+            l2_capacity: 0,
+            l2_capacity_used: 0,
+            l2_denied_symbols: Vec::new(),
+            lease_authority_version: None,
         }
     }
 }
@@ -1319,11 +1455,29 @@ fn default_strategy_enabled() -> bool {
     true
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StrategyRiskGateView {
     pub name: String,
     pub passed: bool,
     pub detail: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub observed: Option<String>,
+    #[serde(default)]
+    pub limit: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub severity: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub policy_version: Option<String>,
+    #[serde(default)]
+    pub source_seq: Option<u64>,
+    #[serde(default)]
+    pub evaluated_ts_ns: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1371,6 +1525,12 @@ pub struct OrderChain {
     pub order_ref: Option<String>,
     #[serde(default)]
     pub strategy_order_ref: Option<String>,
+    #[serde(default)]
+    pub broker_account_id: Option<String>,
+    #[serde(default)]
+    pub broker_perm_id: Option<String>,
+    #[serde(default)]
+    pub broker_client_id: Option<i32>,
     pub broker_status: Option<String>,
     pub order_type: Option<String>,
     pub limit_price: Option<Price>,
@@ -1398,6 +1558,10 @@ pub struct OrderChain {
     #[serde(default)]
     pub min_qty: Option<i64>,
     #[serde(default)]
+    pub total_qty: Option<i64>,
+    #[serde(default)]
+    pub remaining_reason: Option<String>,
+    #[serde(default)]
     pub cancelled_quantity: Option<i64>,
     #[serde(default)]
     pub rejected_quantity: Option<i64>,
@@ -1418,6 +1582,56 @@ pub struct OrderChain {
     pub arrival_price: Option<Price>,
     #[serde(default)]
     pub decision_price: Option<Price>,
+    #[serde(default)]
+    pub intent_created_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub risk_decision_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub submit_requested_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub order_submitted_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub broker_ack_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub cancel_requested_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub cancel_ack_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub bbo_bid_at_signal: Option<Price>,
+    #[serde(default)]
+    pub bbo_ask_at_signal: Option<Price>,
+    #[serde(default)]
+    pub bbo_bid_at_intent: Option<Price>,
+    #[serde(default)]
+    pub bbo_ask_at_intent: Option<Price>,
+    #[serde(default)]
+    pub bbo_bid_at_submit: Option<Price>,
+    #[serde(default)]
+    pub bbo_ask_at_submit: Option<Price>,
+    #[serde(default)]
+    pub bbo_bid_at_ack: Option<Price>,
+    #[serde(default)]
+    pub bbo_ask_at_ack: Option<Price>,
+    #[serde(default)]
+    pub bbo_bid_at_fill: Option<Price>,
+    #[serde(default)]
+    pub bbo_ask_at_fill: Option<Price>,
+    #[serde(default)]
+    pub mid_at_submit: Option<Price>,
+    #[serde(default)]
+    pub spread_bps_at_submit: Option<f64>,
+    #[serde(default)]
+    pub quote_age_ms_at_submit: Option<u64>,
+    #[serde(default)]
+    pub queue_position_estimate: Option<f64>,
+    #[serde(default)]
+    pub slippage_vs_mid_bps: Option<f64>,
+    #[serde(default)]
+    pub slippage_vs_arrival_bps: Option<f64>,
+    #[serde(default)]
+    pub slippage_vs_decision_bps: Option<f64>,
+    #[serde(default)]
+    pub causal_chain_summary: Option<String>,
     #[serde(default)]
     pub submit_ts_ns: Option<i64>,
     #[serde(default)]
@@ -1458,6 +1672,9 @@ impl OrderChain {
             child_order_ids: Vec::new(),
             order_ref: None,
             strategy_order_ref: None,
+            broker_account_id: None,
+            broker_perm_id: None,
+            broker_client_id: None,
             broker_status: None,
             order_type: None,
             limit_price: None,
@@ -1473,6 +1690,8 @@ impl OrderChain {
             leaves_qty_i64: None,
             display_qty: None,
             min_qty: None,
+            total_qty: None,
+            remaining_reason: None,
             cancelled_quantity: None,
             rejected_quantity: None,
             risk: None,
@@ -1485,6 +1704,31 @@ impl OrderChain {
             slippage_bps: None,
             arrival_price: None,
             decision_price: None,
+            intent_created_ts_ns: None,
+            risk_decision_ts_ns: None,
+            submit_requested_ts_ns: None,
+            order_submitted_ts_ns: None,
+            broker_ack_ts_ns: None,
+            cancel_requested_ts_ns: None,
+            cancel_ack_ts_ns: None,
+            bbo_bid_at_signal: None,
+            bbo_ask_at_signal: None,
+            bbo_bid_at_intent: None,
+            bbo_ask_at_intent: None,
+            bbo_bid_at_submit: None,
+            bbo_ask_at_submit: None,
+            bbo_bid_at_ack: None,
+            bbo_ask_at_ack: None,
+            bbo_bid_at_fill: None,
+            bbo_ask_at_fill: None,
+            mid_at_submit: None,
+            spread_bps_at_submit: None,
+            quote_age_ms_at_submit: None,
+            queue_position_estimate: None,
+            slippage_vs_mid_bps: None,
+            slippage_vs_arrival_bps: None,
+            slippage_vs_decision_bps: None,
+            causal_chain_summary: None,
             submit_ts_ns: None,
             ack_ts_ns: None,
             first_fill_ts_ns: None,
@@ -1499,7 +1743,8 @@ impl OrderChain {
     }
 
     pub fn total_quantity(&self) -> Option<i64> {
-        self.intended_quantity
+        self.total_qty
+            .or(self.intended_quantity)
             .or(self.submitted_quantity)
             .or_else(|| {
                 self.remaining_quantity
@@ -1518,6 +1763,16 @@ impl OrderChain {
             (Some(_), None) => "MISSING_LEAVES",
             (None, _) => "MISSING_TOTAL",
         }
+    }
+
+    pub fn refresh_quantity_reason(&mut self) {
+        self.remaining_reason = match self.quantity_status() {
+            "OK" => None,
+            "INCONSISTENT" => Some("filled_plus_remaining_ne_total".to_string()),
+            "MISSING_LEAVES" => Some("missing_remaining_or_leaves_qty".to_string()),
+            "MISSING_TOTAL" => Some("missing_total_qty".to_string()),
+            other => Some(other.to_ascii_lowercase()),
+        };
     }
 
     pub fn push_timeline(
@@ -1614,6 +1869,14 @@ pub struct FillExecutionView {
     pub qty: i64,
     pub price: Price,
     #[serde(default)]
+    pub order_id: Option<String>,
+    #[serde(default)]
+    pub symbol: Option<String>,
+    #[serde(default)]
+    pub side: Option<String>,
+    #[serde(default)]
+    pub exchange: Option<String>,
+    #[serde(default)]
     pub venue: Option<String>,
     #[serde(default)]
     pub liquidity_flag: Option<String>,
@@ -1622,13 +1885,25 @@ pub struct FillExecutionView {
     #[serde(default)]
     pub fees: Vec<Money>,
     #[serde(default)]
+    pub fee_details: Vec<FeeDetailView>,
+    #[serde(default)]
     pub currency: Option<String>,
     #[serde(default)]
     pub fill_ts_ns: Option<i64>,
     #[serde(default)]
     pub report_ts_ns: Option<i64>,
     #[serde(default)]
+    pub ingest_ts_ns: Option<i64>,
+    #[serde(default)]
     pub position_after_fill: Option<i64>,
+    #[serde(default)]
+    pub realized_pnl_delta: Option<Money>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FeeDetailView {
+    pub name: String,
+    pub amount: Money,
 }
 
 fn is_valid_order_transition(current: &OrderLifecycleState, next: &OrderLifecycleState) -> bool {
@@ -1698,6 +1973,16 @@ pub struct RiskDecisionView {
     pub evaluated_rules: Vec<RiskRuleEval>,
     #[serde(default)]
     pub authority_policy_version: Option<String>,
+    #[serde(default)]
+    pub risk_decision_seq: Option<u64>,
+    #[serde(default)]
+    pub risk_result: Option<String>,
+    #[serde(default)]
+    pub limits_snapshot_id: Option<String>,
+    #[serde(default)]
+    pub risk_mode: Option<String>,
+    #[serde(default)]
+    pub limits_enforced: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1719,7 +2004,7 @@ impl PositionStore {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PositionView {
     pub key: String,
     pub account_id: String,
@@ -1729,12 +2014,48 @@ pub struct PositionView {
     pub market_price: Price,
     pub unrealized_pnl: f64,
     pub strategy_attribution: Vec<StrategyPositionView>,
+    #[serde(default)]
+    pub open_buy_qty: Option<i64>,
+    #[serde(default)]
+    pub open_sell_qty: Option<i64>,
+    #[serde(default)]
+    pub pending_cancel_qty: Option<i64>,
+    #[serde(default)]
+    pub reserved_buy_power: Option<Money>,
+    #[serde(default)]
+    pub position_notional: Option<Money>,
+    #[serde(default)]
+    pub gross_exposure: Option<Money>,
+    #[serde(default)]
+    pub net_exposure: Option<Money>,
+    #[serde(default)]
+    pub realized_pnl: Option<Money>,
+    #[serde(default)]
+    pub mark_source: Option<String>,
+    #[serde(default)]
+    pub mark_ts_ns: Option<i64>,
+    #[serde(default)]
+    pub mark_age_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StrategyPositionView {
     pub strategy_id: String,
     pub quantity: i64,
+    #[serde(default)]
+    pub avg_cost: Option<Price>,
+    #[serde(default)]
+    pub realized_pnl: Option<Money>,
+    #[serde(default)]
+    pub unrealized_pnl: Option<Money>,
+    #[serde(default)]
+    pub fees: Vec<Money>,
+    #[serde(default)]
+    pub attribution_method: Option<String>,
+    #[serde(default)]
+    pub attribution_version: Option<String>,
+    #[serde(default)]
+    pub avg_cost_ts_ns: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1750,6 +2071,10 @@ pub struct RiskView {
     #[serde(default)]
     pub structured_limits: Vec<RiskLimitView>,
     pub active_blocks: Vec<RiskBlock>,
+    #[serde(default)]
+    pub risk_mode: Option<String>,
+    #[serde(default)]
+    pub limits_enforced: Option<bool>,
 }
 
 impl Default for RiskView {
@@ -1771,6 +2096,8 @@ impl Default for RiskView {
             limits,
             structured_limits: Vec::new(),
             active_blocks: Vec::new(),
+            risk_mode: None,
+            limits_enforced: None,
         }
     }
 }
@@ -1785,6 +2112,16 @@ pub struct RiskLimitView {
     pub unit: String,
     pub status: String,
     pub updated_ts_ns: i64,
+    #[serde(default)]
+    pub severity: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub policy_version: Option<String>,
+    #[serde(default)]
+    pub source_seq: Option<u64>,
+    #[serde(default)]
+    pub evaluated_ts_ns: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1803,6 +2140,8 @@ pub struct RiskBlock {
     #[serde(default)]
     pub last_seen_ts_ns: i64,
     #[serde(default)]
+    pub last_seen_seq: Option<u64>,
+    #[serde(default)]
     pub cleared_ts_ns: Option<i64>,
     #[serde(default)]
     pub correlation_id: Option<String>,
@@ -1818,6 +2157,14 @@ pub struct RiskBlock {
     pub blocks_short: bool,
     #[serde(default)]
     pub blocks_command: bool,
+    #[serde(default)]
+    pub scope_type: Option<String>,
+    #[serde(default)]
+    pub scope_id: Option<String>,
+    #[serde(default)]
+    pub reason_code: Option<String>,
+    #[serde(default)]
+    pub reason_text: Option<String>,
 }
 
 pub fn refresh_account_safety_state(state: &mut AppState, ts_ns: i64) {
@@ -1982,6 +2329,7 @@ fn account_block(
         source: "account_effective_state".to_string(),
         first_seen_ts_ns: ts_ns,
         last_seen_ts_ns: ts_ns,
+        last_seen_seq: None,
         cleared_ts_ns: None,
         correlation_id: None,
         symbol: None,
@@ -1990,6 +2338,10 @@ fn account_block(
         blocks_cancel,
         blocks_short,
         blocks_command,
+        scope_type: Some("account".to_string()),
+        scope_id: Some(account.account_id.clone()),
+        reason_code: Some(reason_code.to_string()),
+        reason_text: Some(message.to_string()),
     }
 }
 
@@ -2096,6 +2448,18 @@ pub struct EventSummary {
     pub span_id: Option<String>,
     #[serde(default)]
     pub checksum: Option<String>,
+    #[serde(default)]
+    pub event_hash: Option<String>,
+    #[serde(default)]
+    pub prev_event_hash: Option<String>,
+    #[serde(default)]
+    pub aggregate_version: Option<u64>,
+    #[serde(default)]
+    pub aggregate_hash: Option<String>,
+    #[serde(default)]
+    pub projection_version: Option<String>,
+    #[serde(default)]
+    pub marker: Option<String>,
     pub headline: String,
     #[serde(default)]
     pub payload_json: Option<String>,

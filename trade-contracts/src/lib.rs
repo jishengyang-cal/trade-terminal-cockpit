@@ -35,6 +35,7 @@ mod tests {
             trace_id: String::new(),
             span_id: String::new(),
             checksum: String::new(),
+            ..Default::default()
         };
 
         let mut bytes = Vec::new();
@@ -96,6 +97,7 @@ mod tests {
             readonly: Some(false),
             margin_account: Some(true),
             account_type: "margin".to_string(),
+            ..Default::default()
         };
 
         let mut bytes = Vec::new();
@@ -134,7 +136,9 @@ mod tests {
                 name: "quote_freshness".to_string(),
                 passed: true,
                 detail: "17ms".to_string(),
+                ..Default::default()
             }],
+            ..Default::default()
         };
         bytes.clear();
         strategy.encode(&mut bytes).expect("encode strategy health");
@@ -157,6 +161,7 @@ mod tests {
             decided_ts_ns: 42,
             authority_policy_version: "test-policy".to_string(),
             target_environment: "paper".to_string(),
+            ..Default::default()
         };
         bytes.clear();
         authority.encode(&mut bytes).expect("encode authority");
@@ -251,6 +256,7 @@ mod tests {
             can_short: false,
             can_open_long: true,
             can_close_position: true,
+            valuation_ok: true,
         };
         let order = super::trading::v1::OrderTimeline {
             correlation_id: "corr-1".to_string(),
@@ -290,6 +296,7 @@ mod tests {
                 submit_to_ack_ms: Some(500),
                 ack_to_first_fill_ms: Some(500),
                 submit_to_terminal_ms: None,
+                ..Default::default()
             }),
             anomalies: Vec::new(),
             order_ref: "open-scalp:ord-1".to_string(),
@@ -312,6 +319,7 @@ mod tests {
                 fill_ts_ns: Some(1782379801000000000),
                 report_ts_ns: Some(1782379801100000000),
                 position_after_fill: Some(50),
+                ..Default::default()
             }],
             risk: Some(super::trading::v1::OrderRiskProjection {
                 approved: true,
@@ -320,7 +328,11 @@ mod tests {
                 decision_id: "risk-1".to_string(),
                 risk_snapshot_id: "risk-snap-1".to_string(),
                 authority_policy_version: "policy-v1".to_string(),
+                risk_decision_seq: Some(4),
+                risk_result: "PASS".to_string(),
+                limits_snapshot_id: "limits-1".to_string(),
             }),
+            ..Default::default()
         };
         let risk = super::trading::v1::RiskSnapshot {
             global_state: "NORMAL".to_string(),
@@ -347,8 +359,11 @@ mod tests {
                 blocks_cancel: false,
                 blocks_short: true,
                 blocks_command: false,
+                ..Default::default()
             }],
             structured_limits: Vec::new(),
+            risk_mode: "fixture".to_string(),
+            limits_enforced: false,
         };
         let snapshot = super::trading::v1::TerminalProjectionSnapshot {
             schema_version: "trading.projections.v1".to_string(),
@@ -364,6 +379,7 @@ mod tests {
             accounts: Vec::new(),
             commands: Vec::new(),
             market_data: Vec::new(),
+            ..Default::default()
         };
 
         let mut bytes = Vec::new();

@@ -53,6 +53,13 @@ enum RiskDecision {
 message StrategyPositionAttribution {
   string strategy_id = 1;
   int64 quantity = 2;
+  Price avg_cost = 3;
+  Money realized_pnl = 4;
+  Money unrealized_pnl = 5;
+  repeated Money fees = 6;
+  string attribution_method = 7;
+  string attribution_version = 8;
+  optional int64 avg_cost_ts_ns = 9;
 }
 
 message Price {
@@ -74,6 +81,12 @@ message LatencyBreakdown {
   optional uint64 submit_to_ack_ms = 4;
   optional uint64 ack_to_first_fill_ms = 5;
   optional uint64 submit_to_terminal_ms = 6;
+  optional uint64 risk_to_submit_req_ms = 7;
+  optional uint64 submit_req_to_submitted_ms = 8;
+  optional uint64 submitted_to_ack_ms = 9;
+  optional uint64 submit_to_first_fill_ms = 10;
+  optional uint64 cancel_to_ack_ms = 11;
+  optional uint64 partial_to_full_fill_ms = 12;
 }
 
 message RiskRuleEval {
@@ -83,4 +96,9 @@ message RiskRuleEval {
   string observed = 4;
   string threshold = 5;
   string unit = 6;
+  string severity = 7;
+  string reason = 8;
+  string policy_version = 9;
+  optional uint64 source_seq = 10;
+  optional int64 evaluated_ts_ns = 11;
 }

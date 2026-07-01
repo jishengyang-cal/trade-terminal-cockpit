@@ -156,9 +156,21 @@ pub struct LatencyBreakdown {
     pub signal_to_intent_ms: Option<u64>,
     pub intent_to_risk_ms: Option<u64>,
     pub risk_to_submit_ms: Option<u64>,
+    #[serde(default)]
+    pub risk_to_submit_req_ms: Option<u64>,
+    #[serde(default)]
+    pub submit_req_to_submitted_ms: Option<u64>,
     pub submit_to_ack_ms: Option<u64>,
+    #[serde(default)]
+    pub submitted_to_ack_ms: Option<u64>,
     pub ack_to_first_fill_ms: Option<u64>,
+    #[serde(default)]
+    pub submit_to_first_fill_ms: Option<u64>,
     pub submit_to_terminal_ms: Option<u64>,
+    #[serde(default)]
+    pub cancel_to_ack_ms: Option<u64>,
+    #[serde(default)]
+    pub partial_to_full_fill_ms: Option<u64>,
 }
 
 fn default_currency() -> String {

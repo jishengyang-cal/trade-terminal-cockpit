@@ -153,7 +153,9 @@ fn sample_snapshot() -> ProjectionSnapshot {
             strategy_attribution: vec![StrategyPositionView {
                 strategy_id: "open-scalp".to_string(),
                 quantity: 50,
+                ..Default::default()
             }],
+            ..Default::default()
         }],
         risk: Some(RiskView::default()),
         alerts: vec![AlertView {
@@ -192,6 +194,7 @@ fn sample_strategy() -> StrategyView {
         name: "quote_freshness".to_string(),
         passed: true,
         detail: "83ms".to_string(),
+        ..Default::default()
     }];
     strategy
 }

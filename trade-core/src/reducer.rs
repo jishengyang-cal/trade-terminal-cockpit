@@ -294,9 +294,49 @@ fn reduce_account_snapshot(
     if let Some(value) = event.short_intents_blocked_today {
         account.short_intents_blocked_today = value;
     }
+    account.cash_source = event.cash_source.or(account.cash_source.take());
+    account.buying_power_source = event
+        .buying_power_source
+        .or(account.buying_power_source.take());
+    account.net_liq_source = event.net_liq_source.or(account.net_liq_source.take());
+    account.available_funds_source = event
+        .available_funds_source
+        .or(account.available_funds_source.take());
+    account.day_pnl_source = event.day_pnl_source.or(account.day_pnl_source.take());
+    account.realized_source = event.realized_source.or(account.realized_source.take());
+    account.unrealized_source = event.unrealized_source.or(account.unrealized_source.take());
     account.refresh_ocam_authority_mapping();
     account.sync_legacy_f64_from_money();
-    account.mark_account_snapshot(event_id.to_string(), Some(sequence), source, publish_ts_ns);
+    let snapshot_source = event
+        .account_snapshot_source
+        .or(event.valuation_source)
+        .unwrap_or_else(|| source.to_string());
+    let snapshot_id = event
+        .account_snapshot_id
+        .unwrap_or_else(|| event_id.to_string());
+    account.mark_account_snapshot(
+        snapshot_id,
+        event.account_snapshot_seq.or(Some(sequence)),
+        snapshot_source,
+        event.account_snapshot_ts_ns.unwrap_or(publish_ts_ns),
+    );
+    if let Some(age_ms) = event.account_snapshot_age_ms {
+        account.account_snapshot_age_ms = Some(age_ms);
+    }
+    if let Some(stale) = event.valuation_stale {
+        account.valuation_stale = stale;
+    }
+    if let Some(reason) = event.valuation_incomplete_reason {
+        account.valuation_incomplete_reason = Some(reason);
+    }
+    if let Some(status) = event.valuation_status {
+        account.valuation_status = status;
+        account.valuation_ok = event
+            .valuation_ok
+            .unwrap_or(account.valuation_status == "COMPLETE");
+    } else if let Some(ok) = event.valuation_ok {
+        account.valuation_ok = ok;
+    }
     refresh_account_safety_state(state, publish_ts_ns);
 }
 
@@ -370,6 +410,85 @@ fn reduce_strategy_health_updated(state: &mut AppState, event: StrategyHealthUpd
     if !event.parameters.is_empty() {
         strategy.parameters = event.parameters;
     }
+    if let Some(value) = event.signals_total_today {
+        strategy.signals_total_today = value;
+    }
+    if let Some(value) = event.signals_last_1m {
+        strategy.signals_last_1m = value;
+    }
+    if let Some(value) = event.intents_total_today {
+        strategy.intents_total_today = value;
+    }
+    if let Some(value) = event.orders_total_today {
+        strategy.orders_total_today = value;
+    }
+    if let Some(value) = event.fills_total_today {
+        strategy.fills_total_today = value;
+    }
+    if let Some(value) = event.partial_fills_today {
+        strategy.partial_fills_today = value;
+    }
+    if let Some(value) = event.cancels_total_today {
+        strategy.cancels_total_today = value;
+    }
+    if let Some(value) = event.rejects_total_today {
+        strategy.rejects_total_today = value;
+    }
+    strategy.strategy_realized_pnl = event
+        .strategy_realized_pnl
+        .or(strategy.strategy_realized_pnl.take());
+    strategy.strategy_unrealized_pnl = event
+        .strategy_unrealized_pnl
+        .or(strategy.strategy_unrealized_pnl.take());
+    strategy.strategy_total_pnl = event
+        .strategy_total_pnl
+        .or(strategy.strategy_total_pnl.take());
+    strategy.pnl_source = event.pnl_source.or(strategy.pnl_source.take());
+    strategy.pnl_basis = event.pnl_basis.or(strategy.pnl_basis.take());
+    strategy.pnl_diff_vs_account = event
+        .pnl_diff_vs_account
+        .or(strategy.pnl_diff_vs_account.take());
+    strategy.pnl_as_of_ts_ns = event.pnl_as_of_ts_ns.or(strategy.pnl_as_of_ts_ns);
+    strategy.session_phase = event.session_phase.or(strategy.session_phase.take());
+    strategy.strategy_window_id = event
+        .strategy_window_id
+        .or(strategy.strategy_window_id.take());
+    strategy.window_start_ts_ns = event.window_start_ts_ns.or(strategy.window_start_ts_ns);
+    strategy.window_end_ts_ns = event.window_end_ts_ns.or(strategy.window_end_ts_ns);
+    strategy.window_status = event.window_status.or(strategy.window_status.take());
+    strategy.next_transition_ts_ns = event
+        .next_transition_ts_ns
+        .or(strategy.next_transition_ts_ns);
+    strategy.is_market_open = event.is_market_open.or(strategy.is_market_open);
+    strategy.is_regular_session = event.is_regular_session.or(strategy.is_regular_session);
+    strategy.is_opening_window = event.is_opening_window.or(strategy.is_opening_window);
+    if let Some(value) = event.symbols_blocked {
+        strategy.symbols_blocked = value;
+    }
+    if let Some(value) = event.symbols_with_fresh_l1 {
+        strategy.symbols_with_fresh_l1 = value;
+    }
+    if let Some(value) = event.symbols_with_fresh_l2 {
+        strategy.symbols_with_fresh_l2 = value;
+    }
+    if let Some(value) = event.symbols_missing_md {
+        strategy.symbols_missing_md = value;
+    }
+    if let Some(value) = event.l1_symbols_allocated {
+        strategy.l1_symbols_allocated = value;
+    }
+    if let Some(value) = event.l2_capacity {
+        strategy.l2_capacity = value;
+    }
+    if let Some(value) = event.l2_capacity_used {
+        strategy.l2_capacity_used = value;
+    }
+    if !event.l2_denied_symbols.is_empty() {
+        strategy.l2_denied_symbols = event.l2_denied_symbols;
+    }
+    strategy.lease_authority_version = event
+        .lease_authority_version
+        .or(strategy.lease_authority_version.take());
     if !event.risk_gates.is_empty() {
         strategy.risk_gates = event
             .risk_gates
@@ -378,6 +497,15 @@ fn reduce_strategy_health_updated(state: &mut AppState, event: StrategyHealthUpd
                 name: gate.name,
                 passed: gate.passed,
                 detail: gate.detail,
+                scope: gate.scope,
+                observed: gate.observed,
+                limit: gate.limit,
+                status: gate.status,
+                severity: gate.severity,
+                reason: gate.reason,
+                policy_version: gate.policy_version,
+                source_seq: gate.source_seq,
+                evaluated_ts_ns: gate.evaluated_ts_ns,
             })
             .collect();
     }
@@ -411,6 +539,8 @@ fn reduce_signal_generated(
     chain.strategy_id = Some(event.strategy_id);
     chain.symbol = Some(event.symbol.clone());
     chain.arrival_price = event.reference_price.or(event.microprice);
+    chain.bbo_bid_at_signal = event.bid_price;
+    chain.bbo_ask_at_signal = event.ask_price;
     chain.transition_state(OrderLifecycleState::SignalGenerated, event_id, sequence);
     chain.push_timeline(
         sequence,
@@ -440,12 +570,16 @@ fn reduce_intent_created(
     chain.symbol = Some(event.symbol.clone());
     chain.side = Some(event.side.clone());
     chain.intended_quantity = Some(event.quantity);
+    chain.total_qty.get_or_insert(event.quantity);
+    chain.intent_created_ts_ns = Some(publish_ts_ns);
     if let Some(account_id) = event.account_id {
         chain.account_id = Some(account_id);
     }
     chain.notional = event.notional;
     chain.decision_price = event.limit_price_hint.clone();
     chain.limit_price = event.limit_price_hint;
+    chain.bbo_bid_at_intent = chain.bbo_bid_at_signal.clone();
+    chain.bbo_ask_at_intent = chain.bbo_ask_at_signal.clone();
     chain.stop_price = event.stop_price_hint;
     if let Some(tif) = event.time_in_force_hint {
         chain.tif = Some(tif);
@@ -483,7 +617,25 @@ fn reduce_risk_decision(
         risk_snapshot_id: event.risk_snapshot_id.clone(),
         evaluated_rules: event.evaluated_rules.clone(),
         authority_policy_version: event.authority_policy_version.clone(),
+        risk_decision_seq: event.risk_decision_seq.or(Some(sequence)),
+        risk_result: event
+            .risk_result
+            .clone()
+            .or_else(|| Some(if event.approved { "PASS" } else { "FAIL" }.to_string())),
+        limits_snapshot_id: event.limits_snapshot_id.clone(),
+        risk_mode: event.risk_mode.clone(),
+        limits_enforced: event.limits_enforced,
     });
+    chain.risk_decision_ts_ns = event.evaluated_ts_ns.or(Some(publish_ts_ns));
+    if let Some(risk_mode) = event.risk_mode.clone() {
+        state.risk.risk_mode = Some(risk_mode);
+    }
+    if let Some(limits_enforced) = event.limits_enforced {
+        state.risk.limits_enforced = Some(limits_enforced);
+    }
+    chain.latency.intent_to_risk_ms = chain
+        .intent_created_ts_ns
+        .and_then(|intent_ts_ns| non_negative_delta_ms(publish_ts_ns, intent_ts_ns));
     let next_state = if event.approved {
         OrderLifecycleState::RiskApproved
     } else {
@@ -509,6 +661,17 @@ fn reduce_risk_decision(
             unit: rule.unit.clone(),
             status: if rule.passed { "ok" } else { "block" }.to_string(),
             updated_ts_ns: publish_ts_ns,
+            severity: rule.severity.clone(),
+            reason: rule.reason.clone(),
+            policy_version: rule
+                .policy_version
+                .clone()
+                .or(event.authority_policy_version.clone()),
+            source_seq: rule.source_seq.or(Some(sequence)),
+            evaluated_ts_ns: rule
+                .evaluated_ts_ns
+                .or(event.evaluated_ts_ns)
+                .or(Some(publish_ts_ns)),
         });
     }
 
@@ -524,32 +687,41 @@ fn reduce_risk_decision(
         } else {
             event.reason_codes.join(",")
         };
+        let risk_block_scope = format!("{}/{}", event.strategy_id, event.symbol);
+        let risk_block_rule = event
+            .evaluated_rules
+            .iter()
+            .find(|rule| !rule.passed)
+            .map(|rule| rule.rule_id.clone());
         upsert_risk_block(
             state,
             RiskBlock {
                 block_id: event.decision_id.clone().unwrap_or_else(|| {
                     format!("risk_decision:{}:{}", event.strategy_id, event.symbol)
                 }),
-                rule_id: event
-                    .evaluated_rules
-                    .iter()
-                    .find(|rule| !rule.passed)
-                    .map(|rule| rule.rule_id.clone())
-                    .unwrap_or_default(),
-                scope: format!("{}/{}", event.strategy_id, event.symbol),
-                severity: event.severity.unwrap_or_else(|| "block".to_string()),
-                message,
+                rule_id: risk_block_rule.clone().unwrap_or_default(),
+                scope: risk_block_scope.clone(),
+                severity: event
+                    .severity
+                    .clone()
+                    .unwrap_or_else(|| "block".to_string()),
+                message: message.clone(),
                 source: "risk_decision".to_string(),
                 first_seen_ts_ns: publish_ts_ns,
                 last_seen_ts_ns: publish_ts_ns,
                 cleared_ts_ns: None,
-                correlation_id: Some(event.correlation_id),
-                symbol: Some(event.symbol),
-                strategy_id: Some(event.strategy_id),
+                correlation_id: Some(event.correlation_id.clone()),
+                symbol: Some(event.symbol.clone()),
+                strategy_id: Some(event.strategy_id.clone()),
                 blocks_order_submit: true,
                 blocks_cancel: false,
                 blocks_short: true,
                 blocks_command: true,
+                last_seen_seq: event.risk_decision_seq.or(Some(sequence)),
+                scope_type: Some("strategy_symbol".to_string()),
+                scope_id: Some(risk_block_scope),
+                reason_code: risk_block_rule,
+                reason_text: Some(message.clone()),
             },
         );
         if event
@@ -585,6 +757,9 @@ fn reduce_order_submit_requested(
     chain.perm_id = event.perm_id.clone();
     chain.parent_order_id = event.parent_order_id.clone();
     chain.order_ref = event.order_ref.clone();
+    chain.broker_account_id = event.broker_account_id.clone();
+    chain.broker_perm_id = event.broker_perm_id.clone().or(event.perm_id.clone());
+    chain.broker_client_id = event.client_id;
     chain.strategy_order_ref = event.order_ref.clone().or(chain.strategy_order_ref.clone());
     chain.side = event.side.clone().or(chain.side.clone());
     chain.order_type = Some(event.order_type.clone());
@@ -598,12 +773,27 @@ fn reduce_order_submit_requested(
         chain.intended_quantity = event.quantity;
     }
     chain.submitted_quantity = event.quantity;
+    chain.total_qty = event.quantity.or(chain.total_qty);
     chain.remaining_quantity = event.remaining_quantity.or(event.quantity);
     chain.cum_qty_i64 = Some(0);
     chain.leaves_qty_i64 = chain.remaining_quantity;
     chain.display_qty = event.display_size;
     chain.min_qty = event.min_qty;
-    chain.submit_ts_ns = Some(publish_ts_ns);
+    chain.submit_requested_ts_ns = event.submit_requested_ts_ns.or(Some(publish_ts_ns));
+    chain.submit_ts_ns = chain.submit_requested_ts_ns;
+    chain.bbo_bid_at_submit = event.bbo_bid_at_submit;
+    chain.bbo_ask_at_submit = event.bbo_ask_at_submit;
+    chain.mid_at_submit = event.mid_at_submit;
+    chain.spread_bps_at_submit = event.spread_bps_at_submit;
+    chain.quote_age_ms_at_submit = event.quote_age_ms_at_submit;
+    chain.queue_position_estimate = event.queue_position_estimate;
+    chain.slippage_vs_mid_bps = event.slippage_vs_mid_bps;
+    chain.slippage_vs_decision_bps = event.slippage_vs_decision_bps;
+    chain.latency.risk_to_submit_req_ms = chain
+        .risk_decision_ts_ns
+        .and_then(|risk_ts_ns| non_negative_delta_ms(publish_ts_ns, risk_ts_ns));
+    chain.latency.risk_to_submit_ms = chain.latency.risk_to_submit_req_ms;
+    chain.refresh_quantity_reason();
     chain.transition_state(OrderLifecycleState::SubmitRequested, event_id, sequence);
     chain.push_timeline(
         sequence,
@@ -648,6 +838,22 @@ fn reduce_order_submitted(
         chain.route = event.route.clone().or(chain.route.clone());
         chain.exchange = event.exchange.clone().or(chain.exchange.clone());
         chain.destination = event.destination.clone().or(chain.destination.clone());
+        chain.broker_account_id = event
+            .broker_account_id
+            .clone()
+            .or(chain.broker_account_id.clone());
+        chain.broker_perm_id = event
+            .broker_perm_id
+            .clone()
+            .or(event.perm_id.clone())
+            .or(chain.broker_perm_id.clone());
+        chain.broker_client_id = event.client_id.or(chain.broker_client_id);
+        chain.order_submitted_ts_ns = event.order_submitted_ts_ns.or(Some(publish_ts_ns));
+        chain.bbo_bid_at_submit = event.bbo_bid_at_submit.or(chain.bbo_bid_at_submit.clone());
+        chain.bbo_ask_at_submit = event.bbo_ask_at_submit.or(chain.bbo_ask_at_submit.clone());
+        chain.latency.submit_req_to_submitted_ms = chain
+            .submit_requested_ts_ns
+            .and_then(|submit_req_ts_ns| non_negative_delta_ms(publish_ts_ns, submit_req_ts_ns));
         chain.transition_state(OrderLifecycleState::SubmittedToBroker, event_id, sequence);
         chain.push_timeline(
             sequence,
@@ -688,12 +894,31 @@ fn reduce_broker_ack(
         chain.perm_id = Some(perm_id);
     }
     chain.broker_status = Some(event.broker_status.clone());
+    chain.broker_account_id = event
+        .broker_account_id
+        .clone()
+        .or(chain.broker_account_id.clone());
+    chain.broker_perm_id = event
+        .broker_perm_id
+        .clone()
+        .or(event.perm_id.clone())
+        .or(chain.broker_perm_id.clone());
     chain.remaining_quantity = event.remaining_quantity;
     chain.leaves_qty_i64 = event.remaining_quantity;
-    chain.ack_ts_ns = Some(publish_ts_ns);
+    chain.broker_ack_ts_ns = event
+        .broker_ack_ts_ns
+        .or(event.receive_ts_ns)
+        .or(Some(publish_ts_ns));
+    chain.ack_ts_ns = chain.broker_ack_ts_ns;
+    chain.bbo_bid_at_ack = event.bbo_bid_at_ack;
+    chain.bbo_ask_at_ack = event.bbo_ask_at_ack;
     if let Some(submit_ts_ns) = chain.submit_ts_ns {
         chain.latency.submit_to_ack_ms = non_negative_delta_ms(publish_ts_ns, submit_ts_ns);
     }
+    if let Some(submitted_ts_ns) = chain.order_submitted_ts_ns {
+        chain.latency.submitted_to_ack_ms = non_negative_delta_ms(publish_ts_ns, submitted_ts_ns);
+    }
+    chain.refresh_quantity_reason();
     chain.transition_state(OrderLifecycleState::BrokerAckReceived, event_id, sequence);
     chain.push_timeline(
         sequence,
@@ -731,17 +956,31 @@ fn reduce_order_fill(
         fill_seq: sequence,
         qty: last_quantity,
         price: last_price.clone(),
+        order_id: Some(event.order_id.clone()),
+        symbol: event.symbol.clone().or_else(|| chain.symbol.clone()),
+        side: event.side.clone().or_else(|| chain.side.clone()),
+        exchange: event.exchange.clone().or_else(|| chain.exchange.clone()),
         venue: event.venue.clone(),
         liquidity_flag: event.liquidity.clone(),
         commission: event.commission.clone(),
         fees: event.fees.iter().map(|fee| fee.amount.clone()).collect(),
+        fee_details: event
+            .fees
+            .iter()
+            .map(|fee| crate::state::FeeDetailView {
+                name: fee.name.clone(),
+                amount: fee.amount.clone(),
+            })
+            .collect(),
         currency: event
             .settlement_currency
             .clone()
             .or_else(|| Some(last_price.currency.clone())),
         fill_ts_ns: event.trade_ts_ns.or(Some(publish_ts_ns)),
         report_ts_ns: event.report_ts_ns,
-        position_after_fill: None,
+        ingest_ts_ns: event.ingest_ts_ns,
+        position_after_fill: event.position_after_fill,
+        realized_pnl_delta: event.realized_pnl_delta.clone(),
     };
     let applied = chain.apply_fill(
         event.execution_id.as_deref(),
@@ -756,6 +995,16 @@ fn reduce_order_fill(
     if let Some(commission) = event.commission {
         chain.commission = Some(commission);
     }
+    chain.bbo_bid_at_fill = event.bbo_bid_at_fill.or(chain.bbo_bid_at_fill.clone());
+    chain.bbo_ask_at_fill = event.bbo_ask_at_fill.or(chain.bbo_ask_at_fill.clone());
+    chain.slippage_vs_mid_bps = event.slippage_vs_mid_bps.or(chain.slippage_vs_mid_bps);
+    chain.slippage_vs_arrival_bps = event
+        .slippage_vs_arrival_bps
+        .or(chain.slippage_vs_arrival_bps);
+    chain.slippage_vs_decision_bps = event
+        .slippage_vs_decision_bps
+        .or(chain.slippage_vs_decision_bps);
+    chain.refresh_quantity_reason();
     if applied {
         chain.fills.push(fill_view);
         chain.first_fill_ts_ns.get_or_insert(publish_ts_ns);
@@ -765,6 +1014,12 @@ fn reduce_order_fill(
                 .latency
                 .ack_to_first_fill_ms
                 .or_else(|| non_negative_delta_ms(publish_ts_ns, ack_ts_ns));
+        }
+        if let Some(submit_ts_ns) = chain.submit_ts_ns {
+            chain.latency.submit_to_first_fill_ms = chain
+                .latency
+                .submit_to_first_fill_ms
+                .or_else(|| non_negative_delta_ms(publish_ts_ns, submit_ts_ns));
         }
     }
     let next_state = if terminal_fill {
@@ -777,6 +1032,10 @@ fn reduce_order_fill(
         if let Some(submit_ts_ns) = chain.submit_ts_ns {
             chain.latency.submit_to_terminal_ms =
                 non_negative_delta_ms(publish_ts_ns, submit_ts_ns);
+        }
+        if let Some(first_fill_ts_ns) = chain.first_fill_ts_ns {
+            chain.latency.partial_to_full_fill_ms =
+                non_negative_delta_ms(publish_ts_ns, first_fill_ts_ns);
         }
     }
     chain.transition_state(next_state, event_id, sequence);
@@ -805,6 +1064,7 @@ fn reduce_cancel_requested(
     let chain = state.orders.get_or_insert_chain(&event.correlation_id);
     chain.account_id = Some(event.account_id.clone());
     chain.order_id = Some(event.order_id.clone());
+    chain.cancel_requested_ts_ns = event.cancel_requested_ts_ns.or(Some(publish_ts_ns));
     chain.transition_state(OrderLifecycleState::CancelRequested, event_id, sequence);
     chain.push_timeline(sequence, publish_ts_ns, "CANCEL_REQ", event.reason);
     state
@@ -822,6 +1082,12 @@ fn reduce_cancel_rejected(
     let chain = state.orders.get_or_insert_chain(&event.correlation_id);
     chain.account_id = Some(event.account_id.clone());
     chain.order_id = Some(event.order_id.clone());
+    chain.cancel_ack_ts_ns = event.cancel_ack_ts_ns.or(Some(publish_ts_ns));
+    if let (Some(ack_ts_ns), Some(request_ts_ns)) =
+        (chain.cancel_ack_ts_ns, chain.cancel_requested_ts_ns)
+    {
+        chain.latency.cancel_to_ack_ms = non_negative_delta_ms(ack_ts_ns, request_ts_ns);
+    }
     chain.transition_state(OrderLifecycleState::CancelRejected, event_id, sequence);
     chain.push_timeline(sequence, publish_ts_ns, "CANCEL_REJECT", event.reason);
     state
@@ -873,8 +1139,13 @@ fn reduce_order_rejected(
 fn reduce_position_snapshot(state: &mut AppState, event: PositionSnapshot) {
     let account_id = event.account_id.clone();
     let key = format!("{}:{}", event.account_id, event.symbol);
-    let unrealized_pnl =
+    let calculated_unrealized_pnl =
         (event.market_price.as_f64() - event.average_price.as_f64()) * event.net_quantity as f64;
+    let unrealized_pnl = event
+        .unrealized_pnl
+        .as_ref()
+        .map(|money| money.as_f64())
+        .unwrap_or(calculated_unrealized_pnl);
     state.positions.upsert(PositionView {
         key,
         account_id: event.account_id.clone(),
@@ -889,23 +1160,46 @@ fn reduce_position_snapshot(state: &mut AppState, event: PositionSnapshot) {
             .map(|item| StrategyPositionView {
                 strategy_id: item.strategy_id,
                 quantity: item.quantity,
+                avg_cost: item.avg_cost,
+                realized_pnl: item.realized_pnl,
+                unrealized_pnl: item.unrealized_pnl,
+                fees: item.fees,
+                attribution_method: item.attribution_method,
+                attribution_version: item.attribution_version,
+                avg_cost_ts_ns: item.avg_cost_ts_ns,
             })
             .collect(),
+        open_buy_qty: event.open_buy_qty,
+        open_sell_qty: event.open_sell_qty,
+        pending_cancel_qty: event.pending_cancel_qty,
+        reserved_buy_power: event.reserved_buy_power,
+        position_notional: event.position_notional,
+        gross_exposure: event.gross_exposure,
+        net_exposure: event.net_exposure,
+        realized_pnl: event.realized_pnl,
+        mark_source: event.mark_source,
+        mark_ts_ns: event.mark_ts_ns,
+        mark_age_ms: event.mark_age_ms,
     });
     recalculate_account_position_pnl(state, &account_id);
 }
 
 fn reduce_risk_limit_breached(state: &mut AppState, publish_ts_ns: i64, event: RiskLimitBreached) {
     state.risk.global_state = "BLOCKED".to_string();
+    let scope = event.scope.clone();
+    let (scope_type, scope_id) = scope
+        .split_once(':')
+        .map(|(scope_type, scope_id)| (Some(scope_type.to_string()), Some(scope_id.to_string())))
+        .unwrap_or((None, None));
     upsert_risk_block(
         state,
         RiskBlock {
             block_id: event
                 .block_id
                 .clone()
-                .unwrap_or_else(|| format!("risk_limit:{}", event.scope)),
+                .unwrap_or_else(|| format!("risk_limit:{}", scope)),
             rule_id: event.rule_id.unwrap_or_default(),
-            scope: event.scope,
+            scope,
             severity: event.severity,
             message: event.message,
             source: "risk_limit".to_string(),
@@ -919,6 +1213,11 @@ fn reduce_risk_limit_breached(state: &mut AppState, publish_ts_ns: i64, event: R
             blocks_cancel: false,
             blocks_short: true,
             blocks_command: true,
+            last_seen_seq: None,
+            scope_type,
+            scope_id,
+            reason_code: None,
+            reason_text: None,
         },
     );
 }
@@ -997,6 +1296,13 @@ fn reduce_command_authority_decided(state: &mut AppState, event: CommandAuthorit
     command.decided_ts_ns = Some(event.decided_ts_ns);
     command.authority_policy_version = Some(event.authority_policy_version);
     command.target_environment = Some(event.target_environment);
+    command.session = event.session;
+    command.requested_at_ts_ns = event.requested_at_ts_ns;
+    command.risk_checked = event.risk_checked;
+    command.dry_run = event.dry_run;
+    command.execute_broker = event.execute_broker;
+    command.approval_id = event.approval_id;
+    command.status = command.authority_status.clone();
 }
 
 fn reduce_command_audit_recorded(state: &mut AppState, event: CommandAuditRecorded) {
@@ -1006,8 +1312,16 @@ fn reduce_command_audit_recorded(state: &mut AppState, event: CommandAuditRecord
     command.command_type = Some(event.command_type.clone());
     command.audit_status = Some(event.status.clone());
     command.audit_reason = Some(event.reason.clone());
+    command.status = Some(event.status.clone());
     command.target = event.target.clone();
     command.aggregate_id = event.target.clone();
+    command.result_event_id = event.result_event_id;
+    command.error_code = event.error_code;
+    command.error_message = event.error_message;
+    command.rollback_command_id = event.rollback_command_id;
+    command.execute_broker = event.execute_broker.or(command.execute_broker);
+    command.dry_run = event.dry_run.or(command.dry_run);
+    command.requested_at_ts_ns = event.requested_at_ts_ns.or(command.requested_at_ts_ns);
 
     if event.command_type == "GlobalKillSwitchRequested" && command_was_applied(&event.status) {
         state.risk.kill_switch_active = true;
@@ -1134,6 +1448,11 @@ fn upsert_risk_block(state: &mut AppState, mut next: RiskBlock) {
         existing.blocks_cancel = next.blocks_cancel;
         existing.blocks_short = next.blocks_short;
         existing.blocks_command = next.blocks_command;
+        existing.last_seen_seq = next.last_seen_seq.or(existing.last_seen_seq);
+        existing.scope_type = next.scope_type.or(existing.scope_type.take());
+        existing.scope_id = next.scope_id.or(existing.scope_id.take());
+        existing.reason_code = next.reason_code.or(existing.reason_code.take());
+        existing.reason_text = next.reason_text.or(existing.reason_text.take());
         return;
     }
 
@@ -1162,6 +1481,12 @@ fn summarize(envelope: &EventEnvelope) -> EventSummary {
         trace_id: envelope.trace_id.clone(),
         span_id: envelope.span_id.clone(),
         checksum: envelope.checksum.clone(),
+        event_hash: envelope.event_hash.clone(),
+        prev_event_hash: envelope.prev_event_hash.clone(),
+        aggregate_version: envelope.aggregate_version,
+        aggregate_hash: envelope.aggregate_hash.clone(),
+        projection_version: envelope.projection_version.clone(),
+        marker: None,
         headline: headline(&envelope.payload),
         payload_json: serde_json::to_string(&envelope.payload).ok(),
     }

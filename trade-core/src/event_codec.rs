@@ -59,6 +59,11 @@ fn decode_protobuf_event_envelope(bytes: &[u8]) -> Result<EventEnvelope> {
         trace_id: empty_to_none(envelope.trace_id),
         span_id: empty_to_none(envelope.span_id),
         checksum: empty_to_none(envelope.checksum),
+        event_hash: empty_to_none(envelope.event_hash),
+        prev_event_hash: empty_to_none(envelope.prev_event_hash),
+        aggregate_version: envelope.aggregate_version,
+        aggregate_hash: empty_to_none(envelope.aggregate_hash),
+        projection_version: empty_to_none(envelope.projection_version),
         payload,
     })
 }
@@ -182,6 +187,23 @@ fn map_account_snapshot(event: pb::AccountSnapshot) -> domain::AccountSnapshot {
         margin_account: event.margin_account,
         account_type: empty_to_none(event.account_type),
         short_intents_blocked_today: event.short_intents_blocked_today,
+        account_snapshot_id: empty_to_none(event.account_snapshot_id),
+        account_snapshot_seq: event.account_snapshot_seq,
+        account_snapshot_source: empty_to_none(event.account_snapshot_source),
+        account_snapshot_ts_ns: event.account_snapshot_ts_ns,
+        account_snapshot_age_ms: event.account_snapshot_age_ms,
+        valuation_status: empty_to_none(event.valuation_status),
+        valuation_ok: event.valuation_ok,
+        valuation_stale: event.valuation_stale,
+        valuation_incomplete_reason: empty_to_none(event.valuation_incomplete_reason),
+        cash_source: empty_to_none(event.cash_source),
+        buying_power_source: empty_to_none(event.buying_power_source),
+        net_liq_source: empty_to_none(event.net_liq_source),
+        available_funds_source: empty_to_none(event.available_funds_source),
+        day_pnl_source: empty_to_none(event.day_pnl_source),
+        realized_source: empty_to_none(event.realized_source),
+        unrealized_source: empty_to_none(event.unrealized_source),
+        valuation_source: empty_to_none(event.valuation_source),
     }
 }
 
@@ -240,8 +262,50 @@ fn map_strategy_health(event: pb::StrategyHealthUpdated) -> domain::StrategyHeal
                 name: gate.name,
                 passed: gate.passed,
                 detail: gate.detail,
+                scope: empty_to_none(gate.scope),
+                observed: empty_to_none(gate.observed),
+                limit: empty_to_none(gate.limit),
+                status: empty_to_none(gate.status),
+                severity: empty_to_none(gate.severity),
+                reason: empty_to_none(gate.reason),
+                policy_version: empty_to_none(gate.policy_version),
+                source_seq: gate.source_seq,
+                evaluated_ts_ns: gate.evaluated_ts_ns,
             })
             .collect(),
+        signals_total_today: event.signals_total_today,
+        signals_last_1m: event.signals_last_1m,
+        intents_total_today: event.intents_total_today,
+        orders_total_today: event.orders_total_today,
+        fills_total_today: event.fills_total_today,
+        partial_fills_today: event.partial_fills_today,
+        cancels_total_today: event.cancels_total_today,
+        rejects_total_today: event.rejects_total_today,
+        strategy_realized_pnl: map_money(event.strategy_realized_pnl),
+        strategy_unrealized_pnl: map_money(event.strategy_unrealized_pnl),
+        strategy_total_pnl: map_money(event.strategy_total_pnl),
+        pnl_source: empty_to_none(event.pnl_source),
+        pnl_basis: empty_to_none(event.pnl_basis),
+        pnl_diff_vs_account: map_money(event.pnl_diff_vs_account),
+        pnl_as_of_ts_ns: event.pnl_as_of_ts_ns,
+        session_phase: empty_to_none(event.session_phase),
+        strategy_window_id: empty_to_none(event.strategy_window_id),
+        window_start_ts_ns: event.window_start_ts_ns,
+        window_end_ts_ns: event.window_end_ts_ns,
+        window_status: empty_to_none(event.window_status),
+        next_transition_ts_ns: event.next_transition_ts_ns,
+        is_market_open: event.is_market_open,
+        is_regular_session: event.is_regular_session,
+        is_opening_window: event.is_opening_window,
+        symbols_blocked: event.symbols_blocked,
+        symbols_with_fresh_l1: event.symbols_with_fresh_l1,
+        symbols_with_fresh_l2: event.symbols_with_fresh_l2,
+        symbols_missing_md: event.symbols_missing_md,
+        l1_symbols_allocated: event.l1_symbols_allocated,
+        l2_capacity: event.l2_capacity,
+        l2_capacity_used: event.l2_capacity_used,
+        l2_denied_symbols: event.l2_denied_symbols,
+        lease_authority_version: empty_to_none(event.lease_authority_version),
     }
 }
 
@@ -327,6 +391,11 @@ fn map_risk_decision(event: pb::RiskDecisionMade) -> domain::RiskDecisionMade {
                 observed: rule.observed,
                 threshold: rule.threshold,
                 unit: rule.unit,
+                severity: empty_to_none(rule.severity),
+                reason: empty_to_none(rule.reason),
+                policy_version: empty_to_none(rule.policy_version),
+                source_seq: rule.source_seq,
+                evaluated_ts_ns: rule.evaluated_ts_ns,
             })
             .collect(),
         risk_snapshot_id: empty_to_none(event.risk_snapshot_id),
@@ -340,6 +409,12 @@ fn map_risk_decision(event: pb::RiskDecisionMade) -> domain::RiskDecisionMade {
         quote_staleness_ms: event.quote_staleness_ms,
         short_permission: event.short_permission,
         authority_policy_version: empty_to_none(event.authority_policy_version),
+        risk_mode: empty_to_none(event.risk_mode),
+        limits_enforced: event.limits_enforced,
+        limits_snapshot_id: empty_to_none(event.limits_snapshot_id),
+        risk_decision_seq: event.risk_decision_seq,
+        risk_result: empty_to_none(event.risk_result),
+        evaluated_ts_ns: event.evaluated_ts_ns,
     }
 }
 
@@ -373,6 +448,20 @@ fn map_order_submit_requested(event: pb::OrderSubmitRequested) -> domain::OrderS
         display_size: event.display_size,
         discretionary_amount: map_price(event.discretionary_amount),
         transmit: event.transmit,
+        broker_account_id: empty_to_none(event.broker_account_id),
+        broker_perm_id: empty_to_none(event.broker_perm_id),
+        client_id: event.client_id,
+        intent_created_ts_ns: event.intent_created_ts_ns,
+        risk_decision_ts_ns: event.risk_decision_ts_ns,
+        submit_requested_ts_ns: event.submit_requested_ts_ns,
+        bbo_bid_at_submit: map_price(event.bbo_bid_at_submit),
+        bbo_ask_at_submit: map_price(event.bbo_ask_at_submit),
+        mid_at_submit: map_price(event.mid_at_submit),
+        spread_bps_at_submit: event.spread_bps_at_submit,
+        quote_age_ms_at_submit: event.quote_age_ms_at_submit,
+        queue_position_estimate: event.queue_position_estimate,
+        slippage_vs_mid_bps: event.slippage_vs_mid_bps,
+        slippage_vs_decision_bps: event.slippage_vs_decision_bps,
     }
 }
 
@@ -388,6 +477,12 @@ fn map_order_submitted(event: pb::OrderSubmitted) -> domain::OrderSubmitted {
         route: empty_to_none(event.route),
         exchange: empty_to_none(event.exchange),
         destination: empty_to_none(event.destination),
+        broker_account_id: empty_to_none(event.broker_account_id),
+        broker_perm_id: empty_to_none(event.broker_perm_id),
+        client_id: event.client_id,
+        order_submitted_ts_ns: event.order_submitted_ts_ns,
+        bbo_bid_at_submit: map_price(event.bbo_bid_at_submit),
+        bbo_ask_at_submit: map_price(event.bbo_ask_at_submit),
     }
 }
 
@@ -401,6 +496,12 @@ fn map_broker_ack(event: pb::BrokerAckReceived) -> domain::BrokerAckReceived {
         perm_id: empty_to_none(event.perm_id),
         remaining_quantity: event.remaining_quantity,
         receive_ts_ns: event.receive_ts_ns,
+        broker_account_id: empty_to_none(event.broker_account_id),
+        broker_perm_id: empty_to_none(event.broker_perm_id),
+        broker_ack_ts_ns: event.broker_ack_ts_ns,
+        bbo_bid_at_ack: map_price(event.bbo_bid_at_ack),
+        bbo_ask_at_ack: map_price(event.bbo_ask_at_ack),
+        quote_age_ms_at_ack: event.quote_age_ms_at_ack,
     }
 }
 
@@ -432,6 +533,20 @@ fn map_order_fill(event: pb::OrderFill) -> domain::OrderFill {
         trade_ts_ns: event.trade_ts_ns,
         report_ts_ns: event.report_ts_ns,
         settlement_currency: empty_to_none(event.settlement_currency),
+        symbol: empty_to_none(event.symbol),
+        side: empty_to_none(order_side(event.side)),
+        exchange: empty_to_none(event.exchange),
+        realized_pnl_delta: map_money(event.realized_pnl_delta),
+        ingest_ts_ns: event.ingest_ts_ns,
+        position_after_fill: event.position_after_fill,
+        bbo_bid_at_fill: map_price(event.bbo_bid_at_fill),
+        bbo_ask_at_fill: map_price(event.bbo_ask_at_fill),
+        mid_at_fill: map_price(event.mid_at_fill),
+        spread_bps_at_fill: event.spread_bps_at_fill,
+        quote_age_ms_at_fill: event.quote_age_ms_at_fill,
+        slippage_vs_mid_bps: event.slippage_vs_mid_bps,
+        slippage_vs_arrival_bps: event.slippage_vs_arrival_bps,
+        slippage_vs_decision_bps: event.slippage_vs_decision_bps,
     }
 }
 
@@ -441,6 +556,7 @@ fn map_cancel_requested(event: pb::CancelRequested) -> domain::CancelRequested {
         account_id: event.account_id,
         order_id: event.order_id,
         reason: event.reason,
+        cancel_requested_ts_ns: event.cancel_requested_ts_ns,
     }
 }
 
@@ -450,6 +566,7 @@ fn map_cancel_rejected(event: pb::CancelRejected) -> domain::CancelRejected {
         account_id: event.account_id,
         order_id: event.order_id,
         reason: event.reason,
+        cancel_ack_ts_ns: event.cancel_ack_ts_ns,
     }
 }
 
@@ -458,6 +575,7 @@ fn map_order_cancelled(event: pb::OrderCancelled) -> domain::OrderCancelled {
         correlation_id: event.correlation_id,
         account_id: event.account_id,
         order_id: event.order_id,
+        cancel_ack_ts_ns: event.cancel_ack_ts_ns,
     }
 }
 
@@ -489,8 +607,27 @@ fn map_position_snapshot(event: pb::PositionSnapshot) -> domain::PositionSnapsho
             .map(|item| domain::StrategyPositionAttribution {
                 strategy_id: item.strategy_id,
                 quantity: item.quantity,
+                avg_cost: map_price(item.avg_cost),
+                realized_pnl: map_money(item.realized_pnl),
+                unrealized_pnl: map_money(item.unrealized_pnl),
+                fees: item.fees.into_iter().map(map_required_money).collect(),
+                attribution_method: empty_to_none(item.attribution_method),
+                attribution_version: empty_to_none(item.attribution_version),
+                avg_cost_ts_ns: item.avg_cost_ts_ns,
             })
             .collect(),
+        open_buy_qty: event.open_buy_qty,
+        open_sell_qty: event.open_sell_qty,
+        pending_cancel_qty: event.pending_cancel_qty,
+        reserved_buy_power: map_money(event.reserved_buy_power),
+        position_notional: map_money(event.position_notional),
+        gross_exposure: map_money(event.gross_exposure),
+        net_exposure: map_money(event.net_exposure),
+        realized_pnl: map_money(event.realized_pnl),
+        unrealized_pnl: map_money(event.unrealized_pnl),
+        mark_source: empty_to_none(event.mark_source),
+        mark_ts_ns: event.mark_ts_ns,
+        mark_age_ms: event.mark_age_ms,
     }
 }
 
@@ -558,6 +695,12 @@ fn map_command_authority(event: pb::CommandAuthorityDecided) -> domain::CommandA
         decided_ts_ns: event.decided_ts_ns,
         authority_policy_version: event.authority_policy_version,
         target_environment: event.target_environment,
+        session: empty_to_none(event.session),
+        requested_at_ts_ns: event.requested_at_ts_ns,
+        risk_checked: event.risk_checked,
+        dry_run: event.dry_run,
+        execute_broker: event.execute_broker,
+        approval_id: empty_to_none(event.approval_id),
     }
 }
 
@@ -569,6 +712,13 @@ fn map_command_audit(event: pb::CommandAuditRecorded) -> domain::CommandAuditRec
         status: event.status,
         reason: event.reason,
         target: empty_to_none(event.target),
+        result_event_id: empty_to_none(event.result_event_id),
+        error_code: empty_to_none(event.error_code),
+        error_message: empty_to_none(event.error_message),
+        rollback_command_id: empty_to_none(event.rollback_command_id),
+        execute_broker: event.execute_broker,
+        dry_run: event.dry_run,
+        requested_at_ts_ns: event.requested_at_ts_ns,
     }
 }
 
@@ -681,6 +831,11 @@ mod tests {
             trace_id: String::new(),
             span_id: String::new(),
             checksum: String::new(),
+            event_hash: String::new(),
+            prev_event_hash: String::new(),
+            aggregate_version: None,
+            aggregate_hash: String::new(),
+            projection_version: String::new(),
         };
         let mut bytes = Vec::new();
         envelope.encode(&mut bytes).unwrap();

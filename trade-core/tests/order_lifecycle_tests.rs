@@ -339,6 +339,7 @@ fn risk_rule_evals_update_rule_table_and_dedupe_blocks() {
                         observed: "820".to_string(),
                         threshold: "500".to_string(),
                         unit: "ms".to_string(),
+                        ..Default::default()
                     }],
                     risk_snapshot_id: Some("risk-snapshot-001".to_string()),
                     authority_policy_version: Some("policy-v1".to_string()),
@@ -445,6 +446,7 @@ fn cancel_rejection_is_retained_in_order_lifecycle() {
                 account_id: account_id.to_string(),
                 order_id: order_id.to_string(),
                 reason: "operator requested cancel".to_string(),
+                cancel_requested_ts_ns: None,
             }),
         ),
         EventEnvelope::new(
@@ -457,6 +459,7 @@ fn cancel_rejection_is_retained_in_order_lifecycle() {
                 account_id: account_id.to_string(),
                 order_id: order_id.to_string(),
                 reason: "broker already filling".to_string(),
+                cancel_ack_ts_ns: None,
             }),
         ),
     ];
@@ -502,6 +505,7 @@ fn position_unrealized_pnl_is_projection_only() {
                 strategy_attribution: vec![StrategyPositionAttribution {
                     strategy_id: "l1-l2-imbalance".to_string(),
                     quantity: 50,
+                    ..Default::default()
                 }],
                 ..Default::default()
             }),
@@ -535,6 +539,7 @@ fn multi_account_positions_do_not_overwrite_account_matrix() {
                     strategy_attribution: vec![StrategyPositionAttribution {
                         strategy_id: "open-scalp".to_string(),
                         quantity: net_quantity,
+                        ..Default::default()
                     }],
                     ..Default::default()
                 }),
@@ -569,6 +574,13 @@ fn account_command_audit_updates_only_target_account_runtime_state() {
                 status: "dispatched".to_string(),
                 reason: "broker-control runtime plan dispatched".to_string(),
                 target: Some("paper-main".to_string()),
+                result_event_id: None,
+                error_code: None,
+                error_message: None,
+                rollback_command_id: None,
+                execute_broker: None,
+                dry_run: None,
+                requested_at_ts_ns: None,
             }),
         ),
     );
