@@ -187,6 +187,17 @@ def check_path(name: str, path_text: str, required: bool) -> Check:
     return Check(name, True, redact_home(path))
 
 
+def check_readable_path(name: str, path_text: str, required: bool) -> Check:
+    if not path_text:
+        return Check(name, not required, "not configured" if not required else "missing config")
+    path = Path(path_text)
+    if not path.exists():
+        return Check(name, False, f"missing: {redact_home(path)}")
+    if not os.access(path, os.R_OK):
+        return Check(name, False, f"not readable: {redact_home(path)}")
+    return Check(name, True, redact_home(path))
+
+
 def check_adapter_probe(name: str, path_text: str, enabled: bool) -> Check:
     if not path_text:
         return Check(name, True, "not configured")
@@ -288,6 +299,7 @@ def run_checks(values: dict[str, str]) -> tuple[list[Check], dict]:
     audit_subjects = parse_subjects(env_value(values, "TRADE_COCKPIT_AUDIT_SUBJECTS", "trading.audit.>,trading.command.>"))
     codec = env_value(values, "TRADE_COCKPIT_EVENT_CODEC", "protobuf")
     enable_broker = env_value(values, "TRADE_COCKPIT_ENABLE_BROKER_CONTROL", "0") == "1"
+    execution_cost_model = env_value(values, "TRADE_COCKPIT_EXECUTION_COST_MODEL")
 
     checks: list[Check] = []
     summary = {
@@ -298,6 +310,7 @@ def run_checks(values: dict[str, str]) -> tuple[list[Check], dict]:
         "audit_subjects": audit_subjects,
         "event_codec": codec,
         "broker_control_enabled": enable_broker,
+        "execution_cost_model": execution_cost_model,
     }
 
     event_boundary_ok, event_boundary_detail = validate_event_stream_boundary(stream, subject)
@@ -349,6 +362,7 @@ def run_checks(values: dict[str, str]) -> tuple[list[Check], dict]:
             check_path("strategy_control_bin", env_value(values, "TRADE_COCKPIT_STRATEGY_CONTROL_BIN"), False),
             check_path("order_gateway_bin", env_value(values, "TRADE_COCKPIT_ORDER_GATEWAY_BIN"), False),
             check_path("alert_service_bin", env_value(values, "TRADE_COCKPIT_ALERT_SERVICE_BIN"), False),
+            check_readable_path("execution_cost_model", execution_cost_model, bool(execution_cost_model) or enable_broker),
         ]
     )
     checks.append(

@@ -64,6 +64,7 @@ COMMAND_GATEWAY_ADDR=${TRADE_COCKPIT_COMMAND_GATEWAY_ADDR:-127.0.0.1:39732}
 OPERATOR_ID=${TRADE_COCKPIT_OPERATOR_ID:-${USER:-operator-local}}
 SESSION_ID=${TRADE_COCKPIT_SESSION_ID:-trade-terminal-cockpit-local}
 TARGET_ENVIRONMENT=${TRADE_COCKPIT_TARGET_ENVIRONMENT:-paper}
+ENABLE_BROKER_CONTROL=${TRADE_COCKPIT_ENABLE_BROKER_CONTROL:-0}
 
 args=(
   --nats-url "${NATS_URL}"
@@ -80,5 +81,18 @@ args=(
 if [ -n "${TRADE_COCKPIT_COMMAND_AUDIT_JSONL:-}" ]; then
   args+=(--command-gateway-audit-jsonl "${TRADE_COCKPIT_COMMAND_AUDIT_JSONL}")
 fi
+if [ "${ENABLE_BROKER_CONTROL}" = "1" ]; then
+  args+=(--command-gateway-execute-broker-control)
+fi
+if [ -n "${TRADE_COCKPIT_BROKER_RUNTIME_DIR:-}" ]; then
+  args+=(--broker-runtime-dir "${TRADE_COCKPIT_BROKER_RUNTIME_DIR}")
+fi
+if [ -n "${TRADE_COCKPIT_BROKER_CONTROL_BIN:-}" ]; then
+  args+=(--broker-control-bin "${TRADE_COCKPIT_BROKER_CONTROL_BIN}")
+fi
+IFS=, read -ra broker_slots <<< "${TRADE_COCKPIT_BROKER_ACCOUNT_SLOTS:-}"
+for slot in "${broker_slots[@]}"; do
+  [ -n "${slot}" ] && args+=(--broker-account-slot "${slot}")
+done
 
 exec tools/open_local_tui.sh "${args[@]}" "$@"

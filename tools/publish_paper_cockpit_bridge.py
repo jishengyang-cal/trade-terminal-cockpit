@@ -47,6 +47,8 @@ KNOWN_STRATEGY_BLOCKERS = [
     "ARTIFACT_MISSING",
     "ACCOUNT_STATE_STALE",
     "OUTBOUND_DRAIN_DISABLED",
+    "EXECUTION_COST_MODEL_MISSING",
+    "NO_ACTIVE_ROUTE",
     "LOB_DYNAMICS_UNAVAILABLE",
     "FEATURE_SLAB_MISSING",
 ]
@@ -116,13 +118,22 @@ def read_env(path: Path | None) -> dict[str, str]:
     return result
 
 
-def tail_json_objects(path: Path, max_lines: int = 800) -> list[dict[str, Any]]:
+def tail_json_objects(path: Path, max_lines: int = 800, max_bytes: int = 1_048_576) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-max_lines:]
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            offset = max(0, size - max_bytes)
+            handle.seek(offset)
+            data = handle.read()
     except OSError:
         return []
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    if offset:
+        lines = lines[1:]
+    lines = lines[-max_lines:]
     rows: list[dict[str, Any]] = []
     for line in lines:
         text = line.strip()
@@ -487,6 +498,8 @@ def build_strategy_events(
     events: list[dict[str, Any]] = []
     processes = ps_args()
     broker_disable_drain = any("--disable-outbound-drain" in row and "broker-core-service" in row for row in processes)
+    execution_cost_model = args.execution_cost_model.expanduser() if args.execution_cost_model else None
+    execution_cost_model_present = bool(execution_cost_model and execution_cost_model.is_file())
     for spec in specs:
         status = read_toml(spec.operator_status)
         env = read_env(spec.env_file)
@@ -499,7 +512,13 @@ def build_strategy_events(
             artifact_path = expand(env.get("HOT_L3_RUNTIME_LIQUIDITY_VACUUM_ARTIFACT_PATH"))
         else:
             artifact_path = spec.artifact_path
-        manifest_path = spec.activation_manifest or expand(str(runtime_row.get("runtime_universe_activation_manifest_path") or ""))
+        manifest_path = spec.activation_manifest or expand(
+            str(
+                runtime_row.get("runtime_universe_activation_manifest_path")
+                or env.get("HOT_L3_RUNTIME_UNIVERSE_ACTIVATION_MANIFEST_PATH")
+                or ""
+            )
+        )
         counts = activation_counts(manifest_path)
         service_active = systemd_is_active(spec.service)
         blockers: list[str] = []
@@ -511,7 +530,7 @@ def build_strategy_events(
                 warnings.append("FEATURE_SLAB_PRESENT")
             else:
                 blockers.append("FEATURE_SLAB_MISSING")
-        elif not spec.operator_status and not spec.runtime_config:
+        elif not spec.operator_status and not spec.runtime_config and not env:
             blockers.append("NO_RUNTIME_SERVICE")
 
         if service_active is False and spec.service:
@@ -539,8 +558,12 @@ def build_strategy_events(
         stale_age_ns = status.get("account_state_stale_age_ns")
         if isinstance(stale_age_ns, int) and stale_age_ns > args.max_account_stale_ns:
             blockers.append("ACCOUNT_STATE_STALE")
+        if env and spec.component_role != "market_data_feature" and int(counts.get("strategy_route_count") or 0) == 0:
+            blockers.append("NO_ACTIVE_ROUTE")
         if broker_disable_drain and spec.strategy_id == "order-flow-scalp":
             blockers.append("OUTBOUND_DRAIN_DISABLED")
+        if spec.component_role != "market_data_feature" and not execution_cost_model_present:
+            blockers.append("EXECUTION_COST_MODEL_MISSING")
 
         if blockers:
             strategy_state = "FAILED" if "RUNTIME_FAILED" in blockers else "BLOCKED"
@@ -597,6 +620,7 @@ def build_strategy_events(
             "activation_manifest": str(manifest_path or ""),
             "artifact_path": str(artifact_path or ""),
             "broker_outbound_drain_disabled": str(broker_disable_drain).lower(),
+            "execution_cost_model": str(execution_cost_model or ""),
         }
         health = {
             "strategy_id": spec.strategy_id,
@@ -643,7 +667,9 @@ def build_strategy_events(
         health["risk_gates"].append(gate("runtime_state", process_state not in {"failed", "stopped"} and "RUNTIME_STATUS_MISSING" not in blockers, process_state or "unknown"))
         health["risk_gates"].append(gate("account_state_fresh", "ACCOUNT_STATE_STALE" not in blockers, str(stale_age_ns or "unknown")))
         health["risk_gates"].append(gate("submit_allowed", "SUBMIT_DISABLED" not in blockers, str(runtime_row.get("submit_allowed", env.get("HOT_L3_RUNTIME_SUBMIT_ALLOWED", "unknown")))))
+        health["risk_gates"].append(gate("runtime_universe_route", "NO_ACTIVE_ROUTE" not in blockers, str(counts.get("strategy_route_count", "unknown"))))
         health["risk_gates"].append(gate("lob_dynamics", "LOB_DYNAMICS_UNAVAILABLE" not in blockers, "required" if spec.lob_dynamics_required else "not_required"))
+        health["risk_gates"].append(gate("execution_cost_model", "EXECUTION_COST_MODEL_MISSING" not in blockers, str(execution_cost_model or "not_configured")))
         events.append(
             envelope(
                 state=state,
@@ -714,7 +740,7 @@ def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
         StrategySpec("open-scalp"),
         StrategySpec(
             "order-flow-scalp",
-            13,
+            1301,
             config_root / "hot-runtime-order-flow-scalp/order_flow_scalp.news_impulse.paper.runtime.toml",
             state_root / "hot-runtime-order-flow-scalp/news_impulse_paper_runtime_operator_status.toml",
             state_root / "hot-runtime-universe/news-impulse-paper/latest.activation_manifest.json",
@@ -790,6 +816,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--account-observation", type=Path, default=DEFAULT_ACCOUNT_OBSERVATION)
     parser.add_argument("--execution-observation", type=Path, default=DEFAULT_EXECUTION_OBSERVATION)
     parser.add_argument("--broker-execution-projection", type=Path, default=DEFAULT_BROKER_EXECUTION_PROJECTION)
+    parser.add_argument("--execution-cost-model", type=Path)
     parser.add_argument("--account-binding", type=Path, default=DEFAULT_ACCOUNT_BINDING)
     parser.add_argument("--account-id", default="DUP278164+paper")
     parser.add_argument("--broker-account-id", default="DUP278164")
@@ -807,6 +834,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     values = load_env_file(args.env_file)
+    if args.execution_cost_model is None:
+        configured_cost_model = env_value(values, "TRADE_COCKPIT_EXECUTION_COST_MODEL", "")
+        if configured_cost_model:
+            args.execution_cost_model = Path(configured_cost_model)
     last_report: dict[str, Any] = {}
     while True:
         state = state_load(args.state_file)
