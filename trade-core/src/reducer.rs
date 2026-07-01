@@ -1427,6 +1427,16 @@ fn upsert_risk_block(state: &mut AppState, mut next: RiskBlock) {
         next.block_id = format!("{}:{}", next.scope, next.rule_id);
     }
 
+    if next.cleared_ts_ns.is_some() {
+        state.risk.active_blocks.retain(|existing| {
+            !((!next.block_id.is_empty() && existing.block_id == next.block_id)
+                || (!next.rule_id.is_empty()
+                    && existing.rule_id == next.rule_id
+                    && existing.scope == next.scope))
+        });
+        return;
+    }
+
     if let Some(existing) = state.risk.active_blocks.iter_mut().find(|existing| {
         (!next.block_id.is_empty() && existing.block_id == next.block_id)
             || (!next.rule_id.is_empty()

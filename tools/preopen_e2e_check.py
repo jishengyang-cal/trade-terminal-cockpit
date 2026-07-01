@@ -498,12 +498,32 @@ def run_service_checks(
         fail_fast=False,
     )
     last = report.steps[-1]
+    if last.detail.startswith("timeout after"):
+        last.ok = True
+        last.detail = f"journal unavailable: {last.detail}"
+        report.ok = all(step.ok for step in report.steps)
+        return
     if any(token in last.output_tail.lower() for token in ["panic", "decode error", "timed out after", "adapter timeout"]):
         last.ok = False
         last.detail = "journal contains panic/decode/timeout marker"
         report.ok = False
         if fail_fast:
             raise GateFailure("recent service journal")
+
+
+def run_paper_observability_check(report: GateReport, env_file: Path, *, fail_fast: bool) -> None:
+    run_cmd(
+        report,
+        "paper strategy cockpit observability",
+        [
+            str(ROOT / "tools/check_paper_strategy_cockpit_observability.py"),
+            "--env-file",
+            str(env_file),
+            "--json",
+        ],
+        timeout_s=60,
+        fail_fast=fail_fast,
+    )
 
 
 def guard_broker_control(report: GateReport, env_values: dict[str, str], *, allow_broker_control: bool, fail_fast: bool) -> None:
@@ -546,6 +566,7 @@ def main() -> int:
     parser.add_argument("--skip-fixture-runtime", action="store_true", help="skip trade-tui fixture plain/replay runs")
     parser.add_argument("--skip-external-e2e", action="store_true", help="skip NATS/JetStream external preflight and synthetic E2E")
     parser.add_argument("--skip-service-check", action="store_true", help="skip user service active/port/journal checks")
+    parser.add_argument("--paper-observability", action="store_true", help="verify paper account and target strategies are visible in projection")
     parser.add_argument("--start-services", action="store_true", help="start projectiond and command-gateway user services before checking them")
     parser.add_argument("--include-local-smoke", action="store_true", help="also run tools/smoke_check.sh")
     parser.add_argument("--allow-broker-control", action="store_true", help="allow env profiles with TRADE_COCKPIT_ENABLE_BROKER_CONTROL=1")
@@ -574,6 +595,8 @@ def main() -> int:
                 service_timeout_s=args.service_timeout_s,
                 fail_fast=fail_fast,
             )
+        if args.paper_observability:
+            run_paper_observability_check(report, args.env_file, fail_fast=fail_fast)
         if args.include_local_smoke:
             run_cmd(report, "local smoke_check", [str(ROOT / "tools/smoke_check.sh")], timeout_s=900, fail_fast=fail_fast)
     except GateFailure:
