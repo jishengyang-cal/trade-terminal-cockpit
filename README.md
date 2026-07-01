@@ -264,6 +264,33 @@ broker runtime, account-slot mapping, operator policy, and risk adapter are all
 intentionally live. Dangerous commands still require exact confirmation in the
 TUI/CLI and policy acceptance in `command-gateway`.
 
+## Pre-Open Verification
+
+Run the pre-open gate before using the cockpit for a trading session:
+
+```bash
+tools/preopen_e2e_check.py \
+  --env-file "$XDG_CONFIG_HOME/trade-terminal-cockpit/external.env" \
+  --start-services
+```
+
+The gate runs static Rust checks, fixture field-truth assertions, TUI snapshot
+and replay loads, external NATS/JetStream preflight, JSON and protobuf synthetic
+non-broker E2E, and user-service/port/journal checks. It fails closed if
+`TRADE_COCKPIT_ENABLE_BROKER_CONTROL=1` unless `--allow-broker-control` is
+passed explicitly.
+
+Useful narrower runs:
+
+```bash
+# Verify fields and local fixture rendering without touching external services.
+tools/preopen_e2e_check.py --skip-external-e2e --skip-service-check
+
+# Keep collecting failures instead of stopping at the first one.
+tools/preopen_e2e_check.py --start-services --keep-going --json
+```
+
+
 ## Development
 
 Run Rust builds, tests, and smoke checks on the Google VM, not on the local
