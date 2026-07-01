@@ -511,7 +511,7 @@ def build_strategy_events(
                 warnings.append("FEATURE_SLAB_PRESENT")
             else:
                 blockers.append("FEATURE_SLAB_MISSING")
-        elif not spec.operator_status and not spec.env_file and not spec.runtime_config:
+        elif not spec.operator_status and not spec.runtime_config:
             blockers.append("NO_RUNTIME_SERVICE")
 
         if service_active is False and spec.service:
