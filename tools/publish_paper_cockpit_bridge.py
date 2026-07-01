@@ -508,6 +508,62 @@ def activation_counts(path: Path | None) -> dict[str, int | str]:
     return result
 
 
+def activation_route_detail(path: Path | None, runtime_strategy_id: int | None) -> dict[str, Any]:
+    if runtime_strategy_id is None:
+        return {"strategy_route_count": 0, "active_symbols": [], "active_instrument_uids": []}
+    manifest = read_json(path)
+    if not manifest:
+        return {"strategy_route_count": 0, "active_symbols": [], "active_instrument_uids": []}
+
+    route_path: Path | None = None
+    snapshot_path: Path | None = None
+    for artifact in manifest.get("artifacts") or []:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_path = expand(artifact.get("path"))
+        if artifact.get("artifact_kind") == "strategy_routing_plan":
+            route_path = artifact_path
+        elif artifact.get("artifact_kind") == "universe_snapshot":
+            snapshot_path = artifact_path
+
+    route_plan = read_json(route_path)
+    snapshot = read_json(snapshot_path)
+    uid_to_symbol: dict[int, str] = {}
+    for member in snapshot.get("members") or []:
+        if not isinstance(member, dict):
+            continue
+        try:
+            uid = int(member.get("instrument_uid"))
+        except (TypeError, ValueError):
+            continue
+        symbol = str(member.get("symbol") or "").strip()
+        if symbol:
+            uid_to_symbol[uid] = symbol
+
+    active_uids: list[int] = []
+    active_symbols: list[str] = []
+    for route in route_plan.get("routes") or []:
+        if not isinstance(route, dict):
+            continue
+        try:
+            route_strategy_id = int(route.get("strategy_id"))
+            uid = int(route.get("instrument_uid"))
+        except (TypeError, ValueError):
+            continue
+        if route_strategy_id != runtime_strategy_id or route.get("allow_new_entry") is not True:
+            continue
+        active_uids.append(uid)
+        symbol = uid_to_symbol.get(uid)
+        if symbol:
+            active_symbols.append(symbol)
+
+    return {
+        "strategy_route_count": len(active_uids),
+        "active_symbols": sorted(set(active_symbols)),
+        "active_instrument_uids": sorted(set(active_uids)),
+    }
+
+
 def gate(name: str, passed: bool, detail: str, severity: str = "HARD_BLOCK", reason: str | None = None) -> dict[str, Any]:
     return {
         "name": name,
@@ -556,6 +612,7 @@ def build_strategy_events(
             )
         )
         counts = activation_counts(manifest_path)
+        route_detail = activation_route_detail(manifest_path, spec.runtime_strategy_id)
         service_active = systemd_is_active(spec.service)
         news_impulse_state_slab = expand(runtime_row.get("news_impulse_state_slab_path"))
         news_gate_state_slab = expand(runtime_row.get("news_gate_state_slab_path"))
@@ -600,7 +657,8 @@ def build_strategy_events(
         stale_age_ns = status.get("account_state_stale_age_ns")
         if isinstance(stale_age_ns, int) and stale_age_ns > args.max_account_stale_ns:
             blockers.append("ACCOUNT_STATE_STALE")
-        if env and spec.component_role != "market_data_feature" and int(counts.get("strategy_route_count") or 0) == 0:
+        strategy_route_count = int(route_detail.get("strategy_route_count") or 0)
+        if env and spec.component_role != "market_data_feature" and strategy_route_count == 0:
             blockers.append("NO_ACTIVE_ROUTE")
         if broker_disable_drain and spec.strategy_id == "order-flow-scalp" and execution_transport_active is not True:
             blockers.append("OUTBOUND_DRAIN_DISABLED")
@@ -666,6 +724,8 @@ def build_strategy_events(
             "news_gate_state_slab": str(news_gate_state_slab or ""),
             "runtime_inbound_path": str(runtime_inbound_path or ""),
             "unified_ingress_topology": str(unified_ingress_topology_path or ""),
+            "active_symbols": ",".join(route_detail.get("active_symbols") or []),
+            "active_instrument_uids": ",".join(str(uid) for uid in (route_detail.get("active_instrument_uids") or [])),
             "broker_outbound_drain_disabled": str(broker_disable_drain).lower(),
             "execution_cost_model": str(execution_cost_model or ""),
         }
@@ -676,7 +736,7 @@ def build_strategy_events(
             "current_phase": strategy_state,
             "universe_version": str(counts.get("activation_id") or counts.get("trading_date") or "unknown"),
             "universe_count": int(counts.get("member_count") or 0),
-            "active_symbol_count": int(counts.get("strategy_route_count") or 0),
+            "active_symbol_count": strategy_route_count,
             "watched_symbol_count": int(counts.get("member_count") or 0),
             "l2_allocated_symbol_count": int(counts.get("l2_budget") or 0),
             "signals_total_today": int(status.get("decisions_seen") or 0),
