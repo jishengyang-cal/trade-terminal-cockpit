@@ -339,6 +339,48 @@ fn reduce_account_snapshot(
     } else if let Some(ok) = event.valuation_ok {
         account.valuation_ok = ok;
     }
+    let has_explicit_paper_endpoint = state.accounts.by_id.values().any(|account| {
+        let gateway_tier_paper = account
+            .gateway_tier
+            .as_deref()
+            .map(|tier| tier.eq_ignore_ascii_case("paper"))
+            .unwrap_or(false);
+        let endpoint_present = account
+            .endpoint_id
+            .as_deref()
+            .map(|endpoint_id| !endpoint_id.is_empty())
+            .unwrap_or(false);
+        let broker_is_ibkr = account.broker.eq_ignore_ascii_case("ibkr_tws");
+
+        broker_is_ibkr && endpoint_present && gateway_tier_paper
+    });
+    if has_explicit_paper_endpoint {
+        state.risk.broker_order_channel_ok = state.accounts.by_id.values().any(|account| {
+            let gateway_tier_paper = account
+                .gateway_tier
+                .as_deref()
+                .map(|tier| tier.eq_ignore_ascii_case("paper"))
+                .unwrap_or(false);
+            let snapshot_fresh = account
+                .account_snapshot_age_ms
+                .map(|age_ms| age_ms <= 120_000)
+                .unwrap_or(false);
+            let endpoint_present = account
+                .endpoint_id
+                .as_deref()
+                .map(|endpoint_id| !endpoint_id.is_empty())
+                .unwrap_or(false);
+            let broker_is_ibkr = account.broker.eq_ignore_ascii_case("ibkr_tws");
+            let readonly = account.readonly.unwrap_or(true);
+
+            account.broker_connected
+                && broker_is_ibkr
+                && endpoint_present
+                && gateway_tier_paper
+                && snapshot_fresh
+                && !readonly
+        });
+    }
     refresh_account_safety_state(state, publish_ts_ns);
 }
 

@@ -162,7 +162,7 @@ def state_load(path: Path) -> dict[str, Any]:
 
 def state_save(path: Path, state: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
 
@@ -320,13 +320,33 @@ def latest_broker_connection(execution_path: Path, projection_path: Path) -> tup
         if row and int(row.get("captured_at_ns_utc") or 0) >= int(latest.get("captured_at_ns_utc") or 0):
             latest = row
     code = latest.get("error_code")
+    try:
+        code_int = int(code) if code is not None else None
+    except (TypeError, ValueError):
+        code_int = None
     text = latest.get("error_text")
     ts_ns = int(latest.get("captured_at_ns_utc") or 0)
-    if code in {1100, 1101, 1300}:
-        return False, str(text or f"IBKR error {code}"), int(code), ts_ns
-    if latest.get("kind") == "error" and code not in {102, 10185, None}:
-        return False, str(text or f"IBKR error {code}"), int(code) if code is not None else None, ts_ns
-    return True, None, int(code) if code is not None else None, ts_ns
+    disconnected_codes = {1100, 1101, 1300}
+    # Order-level IBKR rejects/cancels should remain visible in broker logs, but
+    # they do not mean the broker transport or account channel is down.
+    benign_error_codes = {
+        102,
+        202,
+        10243,
+        10185,
+        2103,
+        2104,
+        2105,
+        2106,
+        2107,
+        2108,
+        2158,
+    }
+    if code_int in disconnected_codes:
+        return False, str(text or f"IBKR error {code_int}"), code_int, ts_ns
+    if latest.get("kind") == "error" and code_int not in benign_error_codes and code_int is not None:
+        return False, str(text or f"IBKR error {code_int}"), code_int, ts_ns
+    return True, None, code_int, ts_ns
 
 
 def build_account_event(args: argparse.Namespace, state: dict[str, Any], producer: str) -> list[dict[str, Any]]:
@@ -421,6 +441,9 @@ def build_account_event(args: argparse.Namespace, state: dict[str, Any], produce
         "realized_source": source_name if realized is not None else None,
         "unrealized_source": source_name if unrealized is not None else None,
         "valuation_source": source_name,
+        "total_fee_today": 0.0,
+        "commission_today": 0.0,
+        "fees_today": 0.0,
     }
     optional_money = {
         "cash": cash,
@@ -440,8 +463,9 @@ def build_account_event(args: argparse.Namespace, state: dict[str, Any], produce
             data[key] = encoded
     if net_liq and exposure is not None:
         data["exposure_pct"] = abs(float(exposure)) / float(net_liq) * 100.0
-    if broker_error:
-        data["trading_restriction"] = f"BROKER_ERROR_{broker_error_code}:{broker_error}" if broker_error_code else broker_error
+    data["trading_restriction"] = (
+        f"BROKER_ERROR_{broker_error_code}:{broker_error}" if broker_error and broker_error_code else broker_error or ""
+    )
 
     return [
         envelope(
@@ -498,6 +522,7 @@ def build_strategy_events(
     events: list[dict[str, Any]] = []
     processes = ps_args()
     broker_disable_drain = any("--disable-outbound-drain" in row and "broker-core-service" in row for row in processes)
+    execution_transport_active = systemd_is_active("broker-core-transport-execution.service")
     execution_cost_model = args.execution_cost_model.expanduser() if args.execution_cost_model else None
     execution_cost_model_present = bool(execution_cost_model and execution_cost_model.is_file())
     for spec in specs:
@@ -560,7 +585,7 @@ def build_strategy_events(
             blockers.append("ACCOUNT_STATE_STALE")
         if env and spec.component_role != "market_data_feature" and int(counts.get("strategy_route_count") or 0) == 0:
             blockers.append("NO_ACTIVE_ROUTE")
-        if broker_disable_drain and spec.strategy_id == "order-flow-scalp":
+        if broker_disable_drain and spec.strategy_id == "order-flow-scalp" and execution_transport_active is not True:
             blockers.append("OUTBOUND_DRAIN_DISABLED")
         if spec.component_role != "market_data_feature" and not execution_cost_model_present:
             blockers.append("EXECUTION_COST_MODEL_MISSING")
@@ -748,10 +773,11 @@ def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
         ),
         StrategySpec(
             "passive-liquidity-provision",
-            13201,
+            1302,
             config_root / "hot-runtime-passive-liquidity-provision-paper/passive-liquidity-provision.paper.runtime.toml",
             state_root / "hot-runtime-passive-liquidity-provision-paper/runtime_operator_status.toml",
             state_root / "hot-runtime-universe/passive-liquidity-provision-paper/latest.activation_manifest.json",
+            service="hot-runtime-passive-liquidity-provision-paper.service",
         ),
         StrategySpec(
             "stat-arb-pairs",
@@ -759,10 +785,31 @@ def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
             config_root / "hot-runtime-stat-arb-pairs/stat_arb_pairs.paper.runtime.toml",
             state_root / "hot-runtime-stat-arb-pairs/runtime_operator_status.toml",
             artifact_path=state_root / "hot-runtime-stat-arb-pairs/artifacts/stat_arb_pairs_pack.toml",
+            service="hot-runtime-stat-arb-pairs.service",
         ),
-        StrategySpec("l2-liquidity-momentum", 33, env_file=micro_root / "l2-liquidity-momentum.env"),
-        StrategySpec("spread-capture", 34, env_file=micro_root / "spread-capture.env", lob_dynamics_required=True),
-        StrategySpec("liquidity-vacuum", 35, env_file=micro_root / "liquidity-vacuum.env", lob_dynamics_required=True),
+        StrategySpec(
+            "l2-liquidity-momentum",
+            1401,
+            operator_status=state_root / "hot-runtime-microstructure-paper/l2-liquidity-momentum/runtime_operator_status.toml",
+            env_file=micro_root / "l2-liquidity-momentum.env",
+            service="hot-runtime-microstructure-l2-liquidity-momentum-paper.service",
+        ),
+        StrategySpec(
+            "spread-capture",
+            1402,
+            operator_status=state_root / "hot-runtime-microstructure-paper/spread-capture/runtime_operator_status.toml",
+            env_file=micro_root / "spread-capture.env",
+            service="hot-runtime-microstructure-spread-capture-paper.service",
+            lob_dynamics_required=True,
+        ),
+        StrategySpec(
+            "liquidity-vacuum",
+            1403,
+            operator_status=state_root / "hot-runtime-microstructure-paper/liquidity-vacuum/runtime_operator_status.toml",
+            env_file=micro_root / "liquidity-vacuum.env",
+            service="hot-runtime-microstructure-liquidity-vacuum-paper.service",
+            lob_dynamics_required=True,
+        ),
         StrategySpec("orderbook-equilibrium", component_role="market_data_feature", env_file=micro_root / "l2-liquidity-momentum.env"),
         StrategySpec("lob-dynamics", component_role="market_data_feature", env_file=micro_root / "spread-capture.env", lob_dynamics_required=True),
     ]
