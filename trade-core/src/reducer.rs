@@ -10,6 +10,8 @@ use crate::state::{
     MarketDataSummaryView, OrderLifecycleState, PositionView, RiskBlock, RiskDecisionView,
     RiskLimitView, StrategyPositionView,
 };
+use crate::types::Money;
+use std::collections::BTreeMap;
 
 pub fn reduce_event(state: &mut AppState, envelope: EventEnvelope) {
     if !state.seen_event_ids.insert(envelope.event_id.clone()) {
@@ -992,7 +994,7 @@ fn reduce_order_fill(
     if let Some(average_price) = event.average_price {
         chain.average_fill_price = Some(average_price);
     }
-    if let Some(commission) = event.commission {
+    if let Some(commission) = event.commission.clone() {
         chain.commission = Some(commission);
     }
     chain.bbo_bid_at_fill = event.bbo_bid_at_fill.or(chain.bbo_bid_at_fill.clone());
@@ -1052,6 +1054,9 @@ fn reduce_order_fill(
     state
         .orders
         .index_order(&event.account_id, &event.order_id, &event.correlation_id);
+    refresh_order_fee_totals(state, &event.correlation_id);
+    refresh_account_fee_totals(state);
+    refresh_account_aggregate(state);
 }
 
 fn reduce_cancel_requested(
@@ -1401,6 +1406,81 @@ fn recalculate_account_position_pnl(state: &mut AppState, account_id: &str) {
     let account = state.accounts.get_or_insert(account_id);
     account.apply_position_mark_pnl(unrealized_pnl);
     refresh_account_aggregate(state);
+}
+
+fn refresh_order_fee_totals(state: &mut AppState, correlation_id: &str) {
+    let Some(chain) = state.orders.by_correlation_id.get_mut(correlation_id) else {
+        return;
+    };
+
+    let mut total_commission = None;
+    let mut total_fees = None;
+    for fill in &chain.fills {
+        if let Some(commission) = fill.commission.as_ref() {
+            add_money(&mut total_commission, commission);
+        }
+        for fee in &fill.fees {
+            add_money(&mut total_fees, fee);
+        }
+    }
+
+    let mut total_fee = total_commission.clone();
+    if let Some(fees) = total_fees.as_ref() {
+        add_money(&mut total_fee, fees);
+    }
+
+    chain.total_commission = total_commission;
+    chain.total_fees = total_fees;
+    chain.total_fee = total_fee;
+}
+
+fn refresh_account_fee_totals(state: &mut AppState) {
+    let mut totals = BTreeMap::<String, (Option<Money>, Option<Money>, Option<Money>)>::new();
+    for chain in state.orders.by_correlation_id.values() {
+        let Some(account_id) = chain.account_id.as_ref() else {
+            continue;
+        };
+        let entry = totals.entry(account_id.clone()).or_default();
+        if let Some(commission) = chain.total_commission.as_ref() {
+            add_money(&mut entry.0, commission);
+        }
+        if let Some(fees) = chain.total_fees.as_ref() {
+            add_money(&mut entry.1, fees);
+        }
+        if let Some(total_fee) = chain.total_fee.as_ref() {
+            add_money(&mut entry.2, total_fee);
+        }
+    }
+
+    for account in state.accounts.by_id.values_mut() {
+        account.commission_today = None;
+        account.fees_today = None;
+        account.total_fee_today = None;
+    }
+
+    for (account_id, (commission, fees, total_fee)) in totals {
+        let account = state.accounts.get_or_insert(&account_id);
+        account.commission_today = commission;
+        account.fees_today = fees;
+        account.total_fee_today = total_fee;
+    }
+}
+
+fn add_money(total: &mut Option<Money>, value: &Money) {
+    match total {
+        Some(existing) if existing.scale == value.scale && existing.currency == value.currency => {
+            existing.value += value.value;
+        }
+        Some(existing) => {
+            *existing = Money::from_f64(
+                existing.as_f64() + value.as_f64(),
+                existing.currency.clone(),
+            );
+        }
+        None => {
+            *total = Some(value.clone());
+        }
+    }
 }
 
 fn refresh_account_aggregate(state: &mut AppState) {

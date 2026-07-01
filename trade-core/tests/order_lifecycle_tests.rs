@@ -1,11 +1,11 @@
 use trade_core::events::{
     AccountSnapshot, CancelRejected, CancelRequested, CommandAuditRecorded, DomainEvent,
-    EventEnvelope, IntentCreated, MarketDataSummary, OrderFill, OrderSubmitRequested,
+    EventEnvelope, Fee, IntentCreated, MarketDataSummary, OrderFill, OrderSubmitRequested,
     OrderSubmitted, PositionSnapshot, RiskDecisionMade, RiskRuleEval, SignalGenerated,
     StrategyHeartbeat, StrategyPositionAttribution,
 };
 use trade_core::state::OrderLifecycleState;
-use trade_core::{reduce_event, AppState, Price};
+use trade_core::{reduce_event, AppState, Money, Price};
 
 #[test]
 fn reconstructs_order_lifecycle_from_event_sequence() {
@@ -122,6 +122,54 @@ fn duplicate_event_ids_are_idempotent() {
 }
 
 #[test]
+fn aggregates_order_and_account_fee_totals_from_fills() {
+    let mut state = AppState::default();
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-fee-fill-001",
+            "corr-fee",
+            1,
+            "test",
+            DomainEvent::OrderFilled(OrderFill {
+                correlation_id: "corr-fee".to_string(),
+                account_id: "paper-main".to_string(),
+                order_id: "ord-fee".to_string(),
+                execution_id: Some("exec-fee-001".to_string()),
+                filled_quantity: 100,
+                fill_price: Price::from_f64(12.34, "USD"),
+                last_quantity: Some(100),
+                cumulative_quantity: Some(100),
+                remaining_quantity: Some(0),
+                commission: Some(Money::from_f64(0.35, "USD")),
+                fees: vec![
+                    Fee {
+                        name: "sec".to_string(),
+                        amount: Money::from_f64(0.02, "USD"),
+                    },
+                    Fee {
+                        name: "taf".to_string(),
+                        amount: Money::from_f64(0.01, "USD"),
+                    },
+                ],
+                ..Default::default()
+            }),
+        ),
+    );
+
+    let chain = state.orders.by_correlation_id.get("corr-fee").unwrap();
+    assert_money(chain.total_commission.as_ref(), 0.35);
+    assert_money(chain.total_fees.as_ref(), 0.03);
+    assert_money(chain.total_fee.as_ref(), 0.38);
+
+    let account = state.accounts.by_id.get("paper-main").unwrap();
+    assert_money(account.commission_today.as_ref(), 0.35);
+    assert_money(account.fees_today.as_ref(), 0.03);
+    assert_money(account.total_fee_today.as_ref(), 0.38);
+    assert_money(state.account.total_fee_today.as_ref(), 0.38);
+}
+
+#[test]
 fn account_snapshot_derives_ocam_authority_mapping() {
     let mut state = AppState::default();
     state.risk.broker_order_channel_ok = true;
@@ -160,6 +208,11 @@ fn account_snapshot_derives_ocam_authority_mapping() {
         .as_deref()
         .unwrap()
         .starts_with("0x"));
+}
+
+fn assert_money(value: Option<&Money>, expected: f64) {
+    let value = value.expect("money should be present");
+    assert!((value.as_f64() - expected).abs() < 0.0001);
 }
 
 #[test]

@@ -194,6 +194,12 @@ pub struct AccountView {
     pub unrealized_pnl: f64,
     #[serde(default)]
     pub unrealized_pnl_value: Money,
+    #[serde(default)]
+    pub total_fee_today: Option<Money>,
+    #[serde(default)]
+    pub commission_today: Option<Money>,
+    #[serde(default)]
+    pub fees_today: Option<Money>,
     pub exposure_pct: f64,
     pub margin_usage_pct: f64,
     pub short_permission: bool,
@@ -322,6 +328,9 @@ impl AccountView {
             realized_pnl_value: Money::default(),
             unrealized_pnl: 0.0,
             unrealized_pnl_value: Money::default(),
+            total_fee_today: None,
+            commission_today: None,
+            fees_today: None,
             exposure_pct: 0.0,
             margin_usage_pct: 0.0,
             short_permission: false,
@@ -793,6 +802,21 @@ impl AccountStore {
             self.by_id
                 .values()
                 .map(|account| &account.unrealized_pnl_value),
+        );
+        aggregate.total_fee_today = sum_optional_money(
+            self.by_id
+                .values()
+                .map(|account| account.total_fee_today.as_ref()),
+        );
+        aggregate.commission_today = sum_optional_money(
+            self.by_id
+                .values()
+                .map(|account| account.commission_today.as_ref()),
+        );
+        aggregate.fees_today = sum_optional_money(
+            self.by_id
+                .values()
+                .map(|account| account.fees_today.as_ref()),
         );
         aggregate.exposure_pct = self
             .by_id
@@ -1577,6 +1601,12 @@ pub struct OrderChain {
     #[serde(default)]
     pub commission: Option<Money>,
     #[serde(default)]
+    pub total_commission: Option<Money>,
+    #[serde(default)]
+    pub total_fees: Option<Money>,
+    #[serde(default)]
+    pub total_fee: Option<Money>,
+    #[serde(default)]
     pub slippage_bps: Option<f64>,
     #[serde(default)]
     pub arrival_price: Option<Price>,
@@ -1701,6 +1731,9 @@ impl OrderChain {
             notional: None,
             realized_pnl: None,
             commission: None,
+            total_commission: None,
+            total_fees: None,
+            total_fee: None,
             slippage_bps: None,
             arrival_price: None,
             decision_price: None,

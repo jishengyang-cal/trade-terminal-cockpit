@@ -209,6 +209,18 @@ fn render_overview(frame: &mut Frame<'_>, area: Rect, app: &App) {
             "unrealized",
             &selected_account.unrealized_pnl_value.to_string(),
         ),
+        kv(
+            "TOTAL_FEE",
+            &format_optional_money(selected_account.total_fee_today.as_ref()),
+        ),
+        kv(
+            "COMMISSION_TODAY",
+            &format_optional_money(selected_account.commission_today.as_ref()),
+        ),
+        kv(
+            "FEES_TODAY",
+            &format_optional_money(selected_account.fees_today.as_ref()),
+        ),
         kv("net_liq", &selected_account.net_liquidation.to_string()),
         kv("avail", &selected_account.available_funds.to_string()),
         kv("valuation", &selected_account.valuation_status),
@@ -567,6 +579,18 @@ fn render_orders(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 kv_wide(
                     "last_fill",
                     &format_optional_price(chain.last_fill_price.as_ref()),
+                ),
+                kv_wide(
+                    "TOTAL_FEE",
+                    &format_optional_money(chain.total_fee.as_ref()),
+                ),
+                kv_wide(
+                    "total_commission",
+                    &format_optional_money(chain.total_commission.as_ref()),
+                ),
+                kv_wide(
+                    "total_fees",
+                    &format_optional_money(chain.total_fees.as_ref()),
                 ),
                 kv_wide(
                     "intent_created_ts_ns",
