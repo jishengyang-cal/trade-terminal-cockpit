@@ -15,5 +15,5 @@ if [ -n "${DNS_NAME}" ]; then
   printf 'trade_terminal_cockpit_ssh=%s\n' "ssh://${USER_NAME}@${DNS_NAME}"
 fi
 printf 'trade_terminal_cockpit_ssh_ip=%s\n' "ssh://${USER_NAME}@${TAILSCALE_IP}"
-printf 'trade_terminal_cockpit_run=%s\n' "cd ${ROOT_DIR} && cargo run -p trade-tui -- --mock"
-printf 'trade_terminal_cockpit_replay=%s\n' "cd ${ROOT_DIR} && cargo run -p trade-tui -- --replay --mock"
+printf 'trade_terminal_cockpit_run=%s\n' "cd ${ROOT_DIR} && tools/open_external_tui.sh"
+printf 'trade_terminal_cockpit_replay=%s\n' "cd ${ROOT_DIR} && tools/open_external_tui.sh -- --replay"

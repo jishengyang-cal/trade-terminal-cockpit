@@ -128,8 +128,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run external NATS/projection/gateway E2E without broker execution")
     parser.add_argument("--env-file", type=Path, default=Path.home() / ".config/trade-terminal-cockpit/external.env")
     parser.add_argument("--event-codec", choices=["json", "protobuf"], default="json")
+    parser.add_argument(
+        "--allow-demo-events",
+        action="store_true",
+        help="publish synthetic fixture events to the configured trading event stream",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+
+    if not args.allow_demo_events:
+        message = (
+            "refusing to publish synthetic fixture events to the configured trading event stream; "
+            "pass --allow-demo-events only for isolated test streams"
+        )
+        if args.json:
+            print(json.dumps({"ok": False, "error": message}, indent=2, sort_keys=True))
+        else:
+            print(message, file=sys.stderr)
+        return 2
 
     values = load_env_file(args.env_file)
     nats_url = env_value(values, "TRADE_COCKPIT_NATS_URL", "nats://127.0.0.1:14222")

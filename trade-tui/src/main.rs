@@ -42,8 +42,10 @@ fn main() -> Result<()> {
         "snapshot".to_string()
     } else if cli.event_jsonl.is_some() && !cli.mock {
         "jsonl".to_string()
-    } else {
+    } else if cli.mock {
         "mock".to_string()
+    } else {
+        "empty".to_string()
     };
     state.connection.render_fps = cli.fps;
 

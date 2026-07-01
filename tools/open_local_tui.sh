@@ -23,8 +23,4 @@ EOF
   exit 70
 fi
 
-if [[ "$#" -eq 0 ]]; then
-  set -- --mock
-fi
-
 exec "$BIN" "$@"

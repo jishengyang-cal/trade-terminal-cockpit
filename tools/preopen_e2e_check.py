@@ -421,7 +421,13 @@ def run_fixture_runtime_checks(report: GateReport, *, fail_fast: bool) -> None:
     )
 
 
-def run_external_checks(report: GateReport, env_file: Path, *, fail_fast: bool) -> None:
+def run_external_checks(
+    report: GateReport,
+    env_file: Path,
+    *,
+    allow_demo_e2e: bool,
+    fail_fast: bool,
+) -> None:
     run_cmd(
         report,
         "external integration preflight",
@@ -429,11 +435,21 @@ def run_external_checks(report: GateReport, env_file: Path, *, fail_fast: bool) 
         timeout_s=60,
         fail_fast=fail_fast,
     )
+    if not allow_demo_e2e:
+        return
     for codec in ["json", "protobuf"]:
         run_cmd(
             report,
             f"external non-broker e2e {codec}",
-            [str(ROOT / "tools/run_external_e2e.py"), "--env-file", str(env_file), "--event-codec", codec, "--json"],
+            [
+                str(ROOT / "tools/run_external_e2e.py"),
+                "--env-file",
+                str(env_file),
+                "--event-codec",
+                codec,
+                "--allow-demo-events",
+                "--json",
+            ],
             timeout_s=120,
             fail_fast=fail_fast,
         )
@@ -565,6 +581,7 @@ def main() -> int:
     parser.add_argument("--skip-static", action="store_true", help="skip cargo fmt/check/test gate")
     parser.add_argument("--skip-fixture-runtime", action="store_true", help="skip trade-tui fixture plain/replay runs")
     parser.add_argument("--skip-external-e2e", action="store_true", help="skip NATS/JetStream external preflight and synthetic E2E")
+    parser.add_argument("--allow-demo-e2e", action="store_true", help="allow synthetic fixture events to be published by the external E2E")
     parser.add_argument("--skip-service-check", action="store_true", help="skip user service active/port/journal checks")
     parser.add_argument("--paper-observability", action="store_true", help="verify paper account and target strategies are visible in projection")
     parser.add_argument("--start-services", action="store_true", help="start projectiond and command-gateway user services before checking them")
@@ -586,7 +603,12 @@ def main() -> int:
         if not args.skip_fixture_runtime:
             run_fixture_runtime_checks(report, fail_fast=fail_fast)
         if not args.skip_external_e2e:
-            run_external_checks(report, args.env_file, fail_fast=fail_fast)
+            run_external_checks(
+                report,
+                args.env_file,
+                allow_demo_e2e=args.allow_demo_e2e,
+                fail_fast=fail_fast,
+            )
         if not args.skip_service_check:
             run_service_checks(
                 report,

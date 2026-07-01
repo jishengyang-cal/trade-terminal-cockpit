@@ -13,7 +13,7 @@ use trade_core::{decode_event_envelope, DomainEvent, EventCodec, EventEnvelope, 
 pub fn load_events(cli: &Cli, filter: &EventFilter) -> Result<Vec<EventEnvelope>> {
     let events = if cli.event_store_query_bin.is_some() {
         load_events_from_event_store(cli, filter)?
-    } else if cli.mock || (cli.event_jsonl.is_none() && cli.snapshot_json.is_none()) {
+    } else if cli.mock {
         trade_core::sample::sample_events()
     } else if cli.event_jsonl.is_none() {
         Vec::new()
