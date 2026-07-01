@@ -51,6 +51,7 @@ KNOWN_STRATEGY_BLOCKERS = [
     "NO_ACTIVE_ROUTE",
     "LOB_DYNAMICS_UNAVAILABLE",
     "FEATURE_SLAB_MISSING",
+    "NEWS_IMPULSE_SLAB_MISSING",
 ]
 
 
@@ -279,6 +280,16 @@ def parse_runtime_strategy(runtime_config: Path | None, name: str, runtime_id: i
     if runtime:
         result.setdefault("runtime_universe_activation_manifest_path", runtime.get("runtime_universe_activation_manifest_path"))
         result.setdefault("operator_status_path", runtime.get("operator_status_path"))
+    ring = config.get("ring") if isinstance(config.get("ring"), dict) else {}
+    if ring:
+        result.setdefault("runtime_inbound_path", ring.get("inbound_path"))
+        result.setdefault("unified_ingress_topology_path", ring.get("unified_ingress_topology_path"))
+    news_gate = config.get("news_gate") if isinstance(config.get("news_gate"), dict) else {}
+    if news_gate:
+        result.setdefault("news_gate_state_slab_path", news_gate.get("state_slab_path"))
+    news_impulse = config.get("news_impulse") if isinstance(config.get("news_impulse"), dict) else {}
+    if news_impulse:
+        result.setdefault("news_impulse_state_slab_path", news_impulse.get("state_slab_path"))
     return result
 
 
@@ -546,6 +557,10 @@ def build_strategy_events(
         )
         counts = activation_counts(manifest_path)
         service_active = systemd_is_active(spec.service)
+        news_impulse_state_slab = expand(runtime_row.get("news_impulse_state_slab_path"))
+        news_gate_state_slab = expand(runtime_row.get("news_gate_state_slab_path"))
+        runtime_inbound_path = expand(runtime_row.get("runtime_inbound_path"))
+        unified_ingress_topology_path = expand(runtime_row.get("unified_ingress_topology_path"))
         blockers: list[str] = []
         warnings: list[str] = []
 
@@ -580,6 +595,8 @@ def build_strategy_events(
             depth_path = expand(env.get("HOT_L3_RUNTIME_LOB_DYNAMICS_DEPTH_SLAB_PATH"))
             if not depth_path or not depth_path.exists():
                 blockers.append("LOB_DYNAMICS_UNAVAILABLE")
+        if news_impulse_state_slab and not news_impulse_state_slab.exists():
+            blockers.append("NEWS_IMPULSE_SLAB_MISSING")
         stale_age_ns = status.get("account_state_stale_age_ns")
         if isinstance(stale_age_ns, int) and stale_age_ns > args.max_account_stale_ns:
             blockers.append("ACCOUNT_STATE_STALE")
@@ -644,6 +661,11 @@ def build_strategy_events(
             "operator_status": str(spec.operator_status or ""),
             "activation_manifest": str(manifest_path or ""),
             "artifact_path": str(artifact_path or ""),
+            "runtime_variant": "news-impulse" if news_impulse_state_slab else "",
+            "news_impulse_state_slab": str(news_impulse_state_slab or ""),
+            "news_gate_state_slab": str(news_gate_state_slab or ""),
+            "runtime_inbound_path": str(runtime_inbound_path or ""),
+            "unified_ingress_topology": str(unified_ingress_topology_path or ""),
             "broker_outbound_drain_disabled": str(broker_disable_drain).lower(),
             "execution_cost_model": str(execution_cost_model or ""),
         }
@@ -694,6 +716,8 @@ def build_strategy_events(
         health["risk_gates"].append(gate("submit_allowed", "SUBMIT_DISABLED" not in blockers, str(runtime_row.get("submit_allowed", env.get("HOT_L3_RUNTIME_SUBMIT_ALLOWED", "unknown")))))
         health["risk_gates"].append(gate("runtime_universe_route", "NO_ACTIVE_ROUTE" not in blockers, str(counts.get("strategy_route_count", "unknown"))))
         health["risk_gates"].append(gate("lob_dynamics", "LOB_DYNAMICS_UNAVAILABLE" not in blockers, "required" if spec.lob_dynamics_required else "not_required"))
+        if news_impulse_state_slab:
+            health["risk_gates"].append(gate("news_impulse_state_slab", "NEWS_IMPULSE_SLAB_MISSING" not in blockers, str(news_impulse_state_slab)))
         health["risk_gates"].append(gate("execution_cost_model", "EXECUTION_COST_MODEL_MISSING" not in blockers, str(execution_cost_model or "not_configured")))
         events.append(
             envelope(
@@ -765,10 +789,9 @@ def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
         StrategySpec("open-scalp"),
         StrategySpec(
             "order-flow-scalp",
-            1301,
-            config_root / "hot-runtime-order-flow-scalp/order_flow_scalp.news_impulse.paper.runtime.toml",
-            state_root / "hot-runtime-order-flow-scalp/news_impulse_paper_runtime_operator_status.toml",
-            state_root / "hot-runtime-universe/news-impulse-paper/latest.activation_manifest.json",
+            runtime_strategy_id=1301,
+            runtime_config=config_root / "hot-runtime-order-flow-scalp/order_flow_scalp.news_impulse.paper.runtime.toml",
+            operator_status=state_root / "hot-runtime-order-flow-scalp/news_impulse_paper_runtime_operator_status.toml",
             service="hot-runtime-order-flow-scalp-news-impulse-paper.service",
         ),
         StrategySpec(
