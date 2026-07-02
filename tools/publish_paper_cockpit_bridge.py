@@ -34,6 +34,7 @@ DEFAULT_BROKER_EXECUTION_PROJECTION = Path.home() / ".local/state/broker-core/ru
 DEFAULT_ACCOUNT_BINDING = Path.home() / ".local/state/hot-runtime/account/account_slot_binding_manifest.toml"
 DEFAULT_RUNTIME_STATE = Path.home() / ".local/state"
 DEFAULT_CONFIG_ROOT = Path.home() / ".config"
+DEFAULT_STRATEGY_REGISTRY = Path.home() / ".local/state/hot-runtime/strategy-registry"
 MAX_ACCOUNT_STALE_NS = 60_000_000_000
 SCALE_2 = 100
 KNOWN_STRATEGY_BLOCKERS = [
@@ -65,6 +66,11 @@ class StrategySpec:
     env_file: Path | None = None
     artifact_path: Path | None = None
     service: str | None = None
+    account_id: str | None = None
+    account_mode: str | None = None
+    gateway_tier: str | None = None
+    strategy_instance_id: str | None = None
+    runtime_variant: str | None = None
     component_role: str = "strategy"
     lob_dynamics_required: bool = False
 
@@ -83,6 +89,40 @@ def expand(path: str | Path | None) -> Path | None:
     if not path:
         return None
     return Path(path).expanduser()
+
+
+def optional_path(value: Any) -> Path | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return Path(os.path.expandvars(text)).expanduser()
+
+
+def account_mode_from_id(account_id: str, fallback: str = "paper") -> str:
+    lowered = account_id.lower()
+    if lowered.endswith("+live") or ":live" in lowered or "/live/" in lowered:
+        return "live"
+    if lowered.endswith("+paper") or ":paper" in lowered or "/paper/" in lowered:
+        return "paper"
+    return fallback.lower()
+
+
+def mode_payload_value(mode: str) -> str:
+    return {
+        "live": "LIVE",
+        "paper": "PAPER",
+        "replay": "REPLAY",
+        "sim": "SIM",
+    }.get(mode.lower(), mode.upper())
+
+
+def strategy_instance_id(account_id: str, strategy_id: str, explicit: str | None = None) -> str:
+    explicit = (explicit or "").strip()
+    if explicit:
+        return explicit
+    return f"{account_id}/{strategy_id}"
 
 
 def read_json(path: Path | None) -> dict[str, Any]:
@@ -371,6 +411,9 @@ def build_account_event(args: argparse.Namespace, state: dict[str, Any], produce
             break
     account_id = args.account_id
     broker_account_id = str(binding_row.get("account_id") or args.broker_account_id)
+    account_mode = args.account_mode or account_mode_from_id(account_id)
+    gateway_tier = args.gateway_tier or account_mode
+    endpoint_id = args.endpoint_id or f"{account_id}.{gateway_tier}.account"
     captured_at = int(callback.get("_captured_at_ns_utc") or observation.get("observed_at_ns_utc") or 0)
     source_ts = captured_at or ns_now()
     age_ms = max(0, (ns_now() - source_ts) // 1_000_000)
@@ -423,12 +466,12 @@ def build_account_event(args: argparse.Namespace, state: dict[str, Any], produce
         "canonical_account_id": account_id,
         "account_slot": int(binding_row.get("account_slot") or args.account_slot),
         "account_id_hash_hex": str(binding_row.get("account_id_hash_hex") or ""),
-        "endpoint_id": "paper.account",
-        "gateway_tier": "paper",
+        "endpoint_id": endpoint_id,
+        "gateway_tier": gateway_tier,
         "account_role": "data_and_trade",
         "role_bits": 3,
         "readonly": bool(binding_row.get("readonly", False)),
-        "mode": "PAPER",
+        "mode": mode_payload_value(account_mode),
         "broker": "ibkr_tws",
         "broker_connected": broker_connected,
         "account_currency": "USD",
@@ -484,9 +527,10 @@ def build_account_event(args: argparse.Namespace, state: dict[str, Any], produce
             payload_type="account_snapshot",
             payload_data=data,
             producer=producer,
-            correlation_id=f"paper-account-{account_id}",
+            correlation_id=f"account-{account_id}",
             source_ts_ns=source_ts,
             aggregate_id=account_id,
+            environment=account_mode,
         )
     ]
 
@@ -564,12 +608,19 @@ def activation_route_detail(path: Path | None, runtime_strategy_id: int | None) 
     }
 
 
-def gate(name: str, passed: bool, detail: str, severity: str = "HARD_BLOCK", reason: str | None = None) -> dict[str, Any]:
+def gate(
+    name: str,
+    passed: bool,
+    detail: str,
+    severity: str = "HARD_BLOCK",
+    reason: str | None = None,
+    scope: str = "account_strategy",
+) -> dict[str, Any]:
     return {
         "name": name,
         "passed": passed,
         "detail": detail,
-        "scope": "paper",
+        "scope": scope,
         "observed": "PASS" if passed else "FAIL",
         "limit": "PASS",
         "status": "PASS" if passed else "FAIL",
@@ -593,6 +644,11 @@ def build_strategy_events(
     execution_cost_model = args.execution_cost_model.expanduser() if args.execution_cost_model else None
     execution_cost_model_present = bool(execution_cost_model and execution_cost_model.is_file())
     for spec in specs:
+        spec_account_id = spec.account_id or args.account_id
+        spec_account_mode = (spec.account_mode or args.account_mode or account_mode_from_id(spec_account_id)).lower()
+        spec_gateway_tier = spec.gateway_tier or spec_account_mode
+        instance_id = strategy_instance_id(spec_account_id, spec.strategy_id, spec.strategy_instance_id)
+        payload_mode = mode_payload_value(spec_account_mode)
         status = read_toml(spec.operator_status)
         env = read_env(spec.env_file)
         runtime_row = parse_runtime_strategy(spec.runtime_config, spec.strategy_id, spec.runtime_strategy_id)
@@ -672,19 +728,22 @@ def build_strategy_events(
             strategy_state = "RUNNING" if process_state == "running" or service_active is True else "IDLE"
             reason = "OK" if not warnings else ",".join(warnings)
 
-        correlation_id = f"paper-strategy-{spec.strategy_id}"
+        correlation_id = f"account-strategy-{instance_id}"
         state_event = envelope(
             state=state,
             payload_type="strategy_state_changed",
             payload_data={
-                "strategy_id": spec.strategy_id,
+                "strategy_id": instance_id,
+                "canonical_strategy_id": spec.strategy_id,
+                "account_id": spec_account_id,
                 "state": strategy_state,
-                "mode": "PAPER",
+                "mode": payload_mode,
                 "reason": reason,
             },
             producer=producer,
             correlation_id=correlation_id,
-            aggregate_id=spec.strategy_id,
+            aggregate_id=instance_id,
+            environment=spec_account_mode,
         )
         events.append(state_event)
         events.append(
@@ -692,19 +751,27 @@ def build_strategy_events(
                 state=state,
                 payload_type="strategy_heartbeat",
                 payload_data={
-                    "strategy_id": spec.strategy_id,
+                    "strategy_id": instance_id,
+                    "canonical_strategy_id": spec.strategy_id,
+                    "account_id": spec_account_id,
                     "state": strategy_state,
-                    "mode": "PAPER",
+                    "mode": payload_mode,
                     "heartbeat_lag_ms": 0,
                 },
                 producer=producer,
                 correlation_id=correlation_id,
                 causation_id=state_event["event_id"],
-                aggregate_id=spec.strategy_id,
+                aggregate_id=instance_id,
+                environment=spec_account_mode,
             )
         )
 
         parameters = {
+            "account_id": spec_account_id,
+            "account_mode": spec_account_mode,
+            "gateway_tier": spec_gateway_tier,
+            "strategy_instance_id": instance_id,
+            "canonical_strategy_id": spec.strategy_id,
             "component_role": spec.component_role,
             "runtime_strategy_id": "" if spec.runtime_strategy_id is None else str(spec.runtime_strategy_id),
             "service": spec.service or "",
@@ -719,7 +786,7 @@ def build_strategy_events(
             "operator_status": str(spec.operator_status or ""),
             "activation_manifest": str(manifest_path or ""),
             "artifact_path": str(artifact_path or ""),
-            "runtime_variant": "news-impulse" if news_impulse_state_slab else "",
+            "runtime_variant": spec.runtime_variant or ("news-impulse" if news_impulse_state_slab else ""),
             "news_impulse_state_slab": str(news_impulse_state_slab or ""),
             "news_gate_state_slab": str(news_gate_state_slab or ""),
             "runtime_inbound_path": str(runtime_inbound_path or ""),
@@ -730,9 +797,11 @@ def build_strategy_events(
             "execution_cost_model": str(execution_cost_model or ""),
         }
         health = {
-            "strategy_id": spec.strategy_id,
+            "strategy_id": instance_id,
+            "canonical_strategy_id": spec.strategy_id,
+            "account_id": spec_account_id,
             "enabled": strategy_state not in {"FAILED"},
-            "trading_window": "paper",
+            "trading_window": f"{spec_account_id}:{spec_account_mode}",
             "current_phase": strategy_state,
             "universe_version": str(counts.get("activation_id") or counts.get("trading_date") or "unknown"),
             "universe_count": int(counts.get("member_count") or 0),
@@ -754,7 +823,7 @@ def build_strategy_events(
             "pnl_basis": "runtime_status_only",
             "pnl_as_of_ts_ns": int(status.get("captured_at_ns_utc") or ns_now()),
             "session_phase": strategy_state,
-            "strategy_window_id": "paper-runtime",
+            "strategy_window_id": f"{spec_account_id}:runtime",
             "window_status": strategy_state,
             "is_market_open": None,
             "is_regular_session": None,
@@ -787,7 +856,8 @@ def build_strategy_events(
                 producer=producer,
                 correlation_id=correlation_id,
                 causation_id=state_event["event_id"],
-                aggregate_id=spec.strategy_id,
+                aggregate_id=instance_id,
+                environment=spec_account_mode,
             )
         )
         for blocker in dict.fromkeys(blockers):
@@ -796,20 +866,24 @@ def build_strategy_events(
                     state=state,
                     payload_type="risk_limit_breached",
                     payload_data={
-                        "scope": f"strategy:{spec.strategy_id}",
+                        "scope": f"strategy:{instance_id}",
                         "severity": "HARD_BLOCK",
                         "message": blocker,
-                        "block_id": f"{spec.strategy_id}:{blocker}",
+                        "block_id": f"{instance_id}:{blocker}",
                         "rule_id": blocker,
                         "first_seen_ts_ns": ns_now(),
                         "last_seen_ts_ns": ns_now(),
-                        "strategy_id": spec.strategy_id,
+                        "strategy_id": instance_id,
+                        "canonical_strategy_id": spec.strategy_id,
+                        "strategy_instance_id": instance_id,
+                        "account_id": spec_account_id,
                     },
                     producer=producer,
                     correlation_id=correlation_id,
                     causation_id=state_event["event_id"],
                     aggregate_type="risk",
-                    aggregate_id=f"strategy:{spec.strategy_id}",
+                    aggregate_id=f"strategy:{instance_id}",
+                    environment=spec_account_mode,
                 )
             )
         current_blockers = set(blockers)
@@ -821,38 +895,135 @@ def build_strategy_events(
                     state=state,
                     payload_type="risk_limit_breached",
                     payload_data={
-                        "scope": f"strategy:{spec.strategy_id}",
+                        "scope": f"strategy:{instance_id}",
                         "severity": "INFO",
                         "message": f"cleared {blocker}",
-                        "block_id": f"{spec.strategy_id}:{blocker}",
+                        "block_id": f"{instance_id}:{blocker}",
                         "rule_id": blocker,
                         "first_seen_ts_ns": ns_now(),
                         "last_seen_ts_ns": ns_now(),
                         "cleared_ts_ns": ns_now(),
-                        "strategy_id": spec.strategy_id,
+                        "strategy_id": instance_id,
+                        "canonical_strategy_id": spec.strategy_id,
+                        "strategy_instance_id": instance_id,
+                        "account_id": spec_account_id,
                     },
                     producer=producer,
                     correlation_id=correlation_id,
                     causation_id=state_event["event_id"],
                     aggregate_type="risk",
-                    aggregate_id=f"strategy:{spec.strategy_id}",
+                    aggregate_id=f"strategy:{instance_id}",
+                    environment=spec_account_mode,
                 )
             )
     return events
 
 
-def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
+def descriptor_path(row: dict[str, Any], key: str, base_dir: Path) -> Path | None:
+    path = optional_path(row.get(key))
+    if path is None:
+        return None
+    if path.is_absolute():
+        return path
+    return (base_dir / path).expanduser()
+
+
+def descriptor_bool(row: dict[str, Any], key: str, default: bool = False) -> bool:
+    value = row.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def descriptor_int(row: dict[str, Any], key: str) -> int | None:
+    value = row.get(key)
+    if value in {None, ""}:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def spec_from_descriptor(row: dict[str, Any], base_dir: Path, args: argparse.Namespace) -> StrategySpec | None:
+    strategy_id = str(row.get("strategy_id") or row.get("canonical_strategy_id") or "").strip()
+    if not strategy_id:
+        return None
+    account_id = str(row.get("account_id") or args.account_id).strip()
+    account_mode = str(
+        row.get("account_mode")
+        or row.get("mode")
+        or account_mode_from_id(account_id, args.account_mode or "paper")
+    ).lower()
+    if account_mode not in {"paper", "live", "replay", "sim"}:
+        account_mode = account_mode_from_id(account_id, args.account_mode or "paper")
+    gateway_tier = str(row.get("gateway_tier") or account_mode).lower()
+    return StrategySpec(
+        strategy_id=strategy_id,
+        runtime_strategy_id=descriptor_int(row, "runtime_strategy_id"),
+        runtime_config=descriptor_path(row, "runtime_config", base_dir),
+        operator_status=descriptor_path(row, "operator_status", base_dir),
+        activation_manifest=descriptor_path(row, "activation_manifest", base_dir),
+        env_file=descriptor_path(row, "env_file", base_dir),
+        artifact_path=descriptor_path(row, "artifact_path", base_dir),
+        service=str(row.get("service") or "").strip() or None,
+        account_id=account_id,
+        account_mode=account_mode,
+        gateway_tier=gateway_tier,
+        strategy_instance_id=str(row.get("strategy_instance_id") or "").strip() or None,
+        runtime_variant=str(row.get("runtime_variant") or "").strip() or None,
+        component_role=str(row.get("component_role") or "strategy"),
+        lob_dynamics_required=descriptor_bool(row, "lob_dynamics_required", False),
+    )
+
+
+def load_strategy_registry_specs(args: argparse.Namespace) -> list[StrategySpec]:
+    root = args.strategy_registry_dir.expanduser()
+    if not root.is_dir():
+        return []
+    specs: list[StrategySpec] = []
+    for path in sorted(root.rglob("*.json")):
+        value = read_json(path)
+        rows: list[Any]
+        if isinstance(value.get("strategies"), list):
+            rows = value["strategies"]
+        else:
+            rows = [value]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            spec = spec_from_descriptor(row, path.parent, args)
+            if spec is not None:
+                specs.append(spec)
+    return specs
+
+
+def spec_key(spec: StrategySpec, args: argparse.Namespace) -> str:
+    account_id = spec.account_id or args.account_id
+    return strategy_instance_id(account_id, spec.strategy_id, spec.strategy_instance_id)
+
+
+def build_legacy_specs(args: argparse.Namespace) -> list[StrategySpec]:
     state_root = args.runtime_state_root
     config_root = args.config_root
     micro_root = config_root / "hot-runtime-microstructure-paper"
+    account_id = args.account_id
+    account_mode = args.account_mode or account_mode_from_id(account_id)
+    gateway_tier = args.gateway_tier or account_mode
     return [
-        StrategySpec("open-scalp"),
+        StrategySpec("open-scalp", account_id=account_id, account_mode=account_mode, gateway_tier=gateway_tier),
         StrategySpec(
             "order-flow-scalp",
             runtime_strategy_id=1301,
             runtime_config=config_root / "hot-runtime-order-flow-scalp/order_flow_scalp.news_impulse.paper.runtime.toml",
             operator_status=state_root / "hot-runtime-order-flow-scalp/news_impulse_paper_runtime_operator_status.toml",
             service="hot-runtime-order-flow-scalp-news-impulse-paper.service",
+            account_id=account_id,
+            account_mode=account_mode,
+            gateway_tier=gateway_tier,
+            runtime_variant="news-impulse",
         ),
         StrategySpec(
             "passive-liquidity-provision",
@@ -861,6 +1032,9 @@ def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
             state_root / "hot-runtime-passive-liquidity-provision-paper/runtime_operator_status.toml",
             state_root / "hot-runtime-universe/passive-liquidity-provision-paper/latest.activation_manifest.json",
             service="hot-runtime-passive-liquidity-provision-paper.service",
+            account_id=account_id,
+            account_mode=account_mode,
+            gateway_tier=gateway_tier,
         ),
         StrategySpec(
             "stat-arb-pairs",
@@ -869,6 +1043,9 @@ def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
             state_root / "hot-runtime-stat-arb-pairs/runtime_operator_status.toml",
             artifact_path=state_root / "hot-runtime-stat-arb-pairs/artifacts/stat_arb_pairs_pack.toml",
             service="hot-runtime-stat-arb-pairs.service",
+            account_id=account_id,
+            account_mode=account_mode,
+            gateway_tier=gateway_tier,
         ),
         StrategySpec(
             "l2-liquidity-momentum",
@@ -876,6 +1053,9 @@ def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
             operator_status=state_root / "hot-runtime-microstructure-paper/l2-liquidity-momentum/runtime_operator_status.toml",
             env_file=micro_root / "l2-liquidity-momentum.env",
             service="hot-runtime-microstructure-l2-liquidity-momentum-paper.service",
+            account_id=account_id,
+            account_mode=account_mode,
+            gateway_tier=gateway_tier,
         ),
         StrategySpec(
             "spread-capture",
@@ -884,6 +1064,9 @@ def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
             env_file=micro_root / "spread-capture.env",
             service="hot-runtime-microstructure-spread-capture-paper.service",
             lob_dynamics_required=True,
+            account_id=account_id,
+            account_mode=account_mode,
+            gateway_tier=gateway_tier,
         ),
         StrategySpec(
             "liquidity-vacuum",
@@ -892,10 +1075,23 @@ def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
             env_file=micro_root / "liquidity-vacuum.env",
             service="hot-runtime-microstructure-liquidity-vacuum-paper.service",
             lob_dynamics_required=True,
+            account_id=account_id,
+            account_mode=account_mode,
+            gateway_tier=gateway_tier,
         ),
-        StrategySpec("orderbook-equilibrium", component_role="market_data_feature", env_file=micro_root / "l2-liquidity-momentum.env"),
-        StrategySpec("lob-dynamics", component_role="market_data_feature", env_file=micro_root / "spread-capture.env", lob_dynamics_required=True),
+        StrategySpec("orderbook-equilibrium", component_role="market_data_feature", env_file=micro_root / "l2-liquidity-momentum.env", account_id=account_id, account_mode=account_mode, gateway_tier=gateway_tier),
+        StrategySpec("lob-dynamics", component_role="market_data_feature", env_file=micro_root / "spread-capture.env", lob_dynamics_required=True, account_id=account_id, account_mode=account_mode, gateway_tier=gateway_tier),
     ]
+
+
+def build_specs(args: argparse.Namespace) -> list[StrategySpec]:
+    registry_specs = load_strategy_registry_specs(args)
+    if args.no_legacy_strategy_fallback:
+        return registry_specs
+    specs_by_key = {spec_key(spec, args): spec for spec in registry_specs}
+    for spec in build_legacy_specs(args):
+        specs_by_key.setdefault(spec_key(spec, args), spec)
+    return list(specs_by_key.values())
 
 
 def build_events(args: argparse.Namespace, state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -942,6 +1138,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-file", type=Path, default=DEFAULT_STATE_FILE)
     parser.add_argument("--runtime-state-root", type=Path, default=DEFAULT_RUNTIME_STATE)
     parser.add_argument("--config-root", type=Path, default=DEFAULT_CONFIG_ROOT)
+    parser.add_argument("--strategy-registry-dir", type=Path, default=DEFAULT_STRATEGY_REGISTRY)
+    parser.add_argument("--no-legacy-strategy-fallback", action="store_true")
     parser.add_argument("--account-callback", type=Path, default=DEFAULT_ACCOUNT_CALLBACK)
     parser.add_argument("--account-observation", type=Path, default=DEFAULT_ACCOUNT_OBSERVATION)
     parser.add_argument("--execution-observation", type=Path, default=DEFAULT_EXECUTION_OBSERVATION)
@@ -949,6 +1147,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--execution-cost-model", type=Path)
     parser.add_argument("--account-binding", type=Path, default=DEFAULT_ACCOUNT_BINDING)
     parser.add_argument("--account-id", default="DUP278164+paper")
+    parser.add_argument("--account-mode", default="paper")
+    parser.add_argument("--gateway-tier")
+    parser.add_argument("--endpoint-id")
     parser.add_argument("--broker-account-id", default="DUP278164")
     parser.add_argument("--account-slot", type=int, default=1)
     parser.add_argument("--max-account-stale-ns", type=int, default=MAX_ACCOUNT_STALE_NS)

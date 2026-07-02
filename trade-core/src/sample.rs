@@ -72,12 +72,18 @@ pub fn sample_events() -> Vec<EventEnvelope> {
         })),
         next(DomainEvent::StrategyHeartbeat(StrategyHeartbeat {
             strategy_id: "open-scalp".to_string(),
+            canonical_strategy_id: None,
+            strategy_instance_id: None,
+            account_id: None,
             state: "RUN".to_string(),
             mode: "PAPER".to_string(),
             heartbeat_lag_ms: 83,
         })),
         next(DomainEvent::StrategyHealthUpdated(StrategyHealthUpdated {
             strategy_id: "open-scalp".to_string(),
+            canonical_strategy_id: None,
+            strategy_instance_id: None,
+            account_id: None,
             enabled: Some(true),
             trading_window: Some("09:32-09:40".to_string()),
             current_phase: Some("active".to_string()),

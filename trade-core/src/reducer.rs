@@ -8,7 +8,7 @@ use crate::events::{
 use crate::state::{
     refresh_account_safety_state, AlertView, AppState, EventSummary, FillExecutionView,
     MarketDataSummaryView, OrderLifecycleState, PositionView, RiskBlock, RiskDecisionView,
-    RiskLimitView, StrategyPositionView,
+    RiskLimitView, StrategyPositionView, StrategyView,
 };
 use crate::types::Money;
 use std::collections::BTreeMap;
@@ -384,8 +384,93 @@ fn reduce_account_snapshot(
     refresh_account_safety_state(state, publish_ts_ns);
 }
 
+fn projected_strategy_id(
+    strategy_id: &str,
+    account_id: Option<&str>,
+    strategy_instance_id: Option<&str>,
+) -> String {
+    if let Some(instance_id) = strategy_instance_id {
+        if !instance_id.is_empty() {
+            return instance_id.to_string();
+        }
+    }
+    if let Some(account_id) = account_id {
+        if !account_id.is_empty() {
+            let prefix = format!("{account_id}/");
+            if strategy_id.starts_with(&prefix) {
+                return strategy_id.to_string();
+            }
+            return format!("{account_id}/{strategy_id}");
+        }
+    }
+    strategy_id.to_string()
+}
+
+fn apply_strategy_identity(
+    strategy: &mut StrategyView,
+    projection_id: String,
+    canonical_strategy_id: String,
+    account_id: Option<String>,
+    account_mode: Option<String>,
+    strategy_instance_id: Option<String>,
+) {
+    strategy.strategy_id = projection_id.clone();
+    strategy.strategy_instance_id = Some(strategy_instance_id.unwrap_or(projection_id));
+    strategy.canonical_strategy_id = Some(canonical_strategy_id);
+    if account_id.is_some() {
+        strategy.account_id = account_id;
+    }
+    if account_mode.is_some() {
+        strategy.account_mode = account_mode;
+    }
+}
+
+fn drop_legacy_strategy_alias(
+    state: &mut AppState,
+    projection_id: &str,
+    canonical_strategy_id: &str,
+) {
+    if projection_id == canonical_strategy_id {
+        return;
+    }
+    let should_remove = state
+        .strategies
+        .by_id
+        .get(canonical_strategy_id)
+        .map(|strategy| {
+            strategy.account_id.is_none()
+                && strategy
+                    .canonical_strategy_id
+                    .as_deref()
+                    .map(|existing| existing == canonical_strategy_id)
+                    .unwrap_or(true)
+        })
+        .unwrap_or(false);
+    if should_remove {
+        state.strategies.by_id.remove(canonical_strategy_id);
+    }
+}
+
 fn reduce_strategy_heartbeat(state: &mut AppState, sequence: u64, event: StrategyHeartbeat) {
-    let strategy = state.strategies.get_or_insert(&event.strategy_id);
+    let projection_id = projected_strategy_id(
+        &event.strategy_id,
+        event.account_id.as_deref(),
+        event.strategy_instance_id.as_deref(),
+    );
+    let canonical_strategy_id = event
+        .canonical_strategy_id
+        .clone()
+        .unwrap_or_else(|| event.strategy_id.clone());
+    drop_legacy_strategy_alias(state, &projection_id, &canonical_strategy_id);
+    let strategy = state.strategies.get_or_insert(&projection_id);
+    apply_strategy_identity(
+        strategy,
+        projection_id,
+        canonical_strategy_id,
+        event.account_id,
+        Some(event.mode.to_lowercase()),
+        event.strategy_instance_id,
+    );
     strategy.state = event.state;
     strategy.mode = event.mode;
     strategy.heartbeat_lag_ms = Some(event.heartbeat_lag_ms);
@@ -393,7 +478,35 @@ fn reduce_strategy_heartbeat(state: &mut AppState, sequence: u64, event: Strateg
 }
 
 fn reduce_strategy_health_updated(state: &mut AppState, event: StrategyHealthUpdated) {
-    let strategy = state.strategies.get_or_insert(&event.strategy_id);
+    let account_id = event
+        .account_id
+        .clone()
+        .or_else(|| event.parameters.get("account_id").cloned());
+    let strategy_instance_id = event
+        .strategy_instance_id
+        .clone()
+        .or_else(|| event.parameters.get("strategy_instance_id").cloned());
+    let projection_id = projected_strategy_id(
+        &event.strategy_id,
+        account_id.as_deref(),
+        strategy_instance_id.as_deref(),
+    );
+    let canonical_strategy_id = event
+        .canonical_strategy_id
+        .clone()
+        .or_else(|| event.parameters.get("canonical_strategy_id").cloned())
+        .unwrap_or_else(|| event.strategy_id.clone());
+    let account_mode = event.parameters.get("account_mode").cloned();
+    drop_legacy_strategy_alias(state, &projection_id, &canonical_strategy_id);
+    let strategy = state.strategies.get_or_insert(&projection_id);
+    apply_strategy_identity(
+        strategy,
+        projection_id,
+        canonical_strategy_id,
+        account_id,
+        account_mode,
+        strategy_instance_id,
+    );
     if let Some(value) = event.enabled {
         strategy.enabled = value;
     }
@@ -556,7 +669,26 @@ fn reduce_strategy_health_updated(state: &mut AppState, event: StrategyHealthUpd
 }
 
 fn reduce_strategy_state_changed(state: &mut AppState, sequence: u64, event: StrategyStateChanged) {
-    let strategy = state.strategies.get_or_insert(&event.strategy_id);
+    let projection_id = projected_strategy_id(
+        &event.strategy_id,
+        event.account_id.as_deref(),
+        event.strategy_instance_id.as_deref(),
+    );
+    let canonical_strategy_id = event
+        .canonical_strategy_id
+        .clone()
+        .unwrap_or_else(|| event.strategy_id.clone());
+    let account_mode = Some(event.mode.to_lowercase());
+    drop_legacy_strategy_alias(state, &projection_id, &canonical_strategy_id);
+    let strategy = state.strategies.get_or_insert(&projection_id);
+    apply_strategy_identity(
+        strategy,
+        projection_id,
+        canonical_strategy_id,
+        event.account_id,
+        account_mode,
+        event.strategy_instance_id,
+    );
     strategy.state = event.state;
     strategy.mode = event.mode;
     strategy.last_reason = Some(event.reason);

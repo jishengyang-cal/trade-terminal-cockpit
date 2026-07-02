@@ -1277,6 +1277,14 @@ impl StrategyStore {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrategyView {
     pub strategy_id: String,
+    #[serde(default)]
+    pub canonical_strategy_id: Option<String>,
+    #[serde(default)]
+    pub strategy_instance_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub account_mode: Option<String>,
     pub state: String,
     pub mode: String,
     pub universe_count: u64,
@@ -1405,6 +1413,10 @@ impl StrategyView {
     pub fn new(strategy_id: &str) -> Self {
         Self {
             strategy_id: strategy_id.to_string(),
+            canonical_strategy_id: None,
+            strategy_instance_id: None,
+            account_id: None,
+            account_mode: None,
             state: "UNKNOWN".to_string(),
             mode: "PAPER".to_string(),
             universe_count: 0,

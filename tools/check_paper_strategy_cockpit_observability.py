@@ -31,6 +31,33 @@ DEFAULT_STRATEGIES = [
 ]
 
 
+def resolve_strategy(
+    strategy_by_id: dict[str, dict[str, Any]],
+    expected: str,
+    account_id: str,
+) -> dict[str, Any] | None:
+    exact = strategy_by_id.get(expected)
+    if exact is not None:
+        return exact
+    for strategy in strategy_by_id.values():
+        parameters = strategy.get("parameters") or {}
+        if not isinstance(parameters, dict):
+            parameters = {}
+        canonical_strategy_id = str(parameters.get("canonical_strategy_id") or strategy.get("canonical_strategy_id") or "")
+        strategy_account_id = str(parameters.get("account_id") or strategy.get("account_id") or "")
+        if canonical_strategy_id == expected and strategy_account_id == account_id:
+            return strategy
+    suffix = f"/{expected}"
+    for strategy_id, strategy in strategy_by_id.items():
+        parameters = strategy.get("parameters") or {}
+        if not isinstance(parameters, dict):
+            parameters = {}
+        strategy_account_id = str(parameters.get("account_id") or strategy.get("account_id") or "")
+        if strategy_id.endswith(suffix) and (not strategy_account_id or strategy_account_id == account_id):
+            return strategy
+    return None
+
+
 def request_tcp(addr: str, payload: dict[str, Any], timeout: float = 5.0) -> dict[str, Any]:
     host, port_text = addr.rsplit(":", 1)
     with socket.create_connection((host, int(port_text)), timeout=timeout) as sock:
@@ -128,36 +155,49 @@ def main() -> int:
     if not args.allow_synthetic_paper_main and "paper-main" in account_by_id and args.account_id not in account_by_id:
         errors.append("projection only exposes synthetic paper-main account")
 
-    missing_strategies = [strategy for strategy in strategies_expected if strategy not in strategy_by_id]
+    resolved_strategies = {
+        strategy: resolve_strategy(strategy_by_id, strategy, args.account_id)
+        for strategy in strategies_expected
+    }
+    missing_strategies = [strategy for strategy, row in resolved_strategies.items() if row is None]
     if missing_strategies:
         errors.append("missing strategies: " + ",".join(missing_strategies))
 
     strategy_reports = []
     for strategy_id in strategies_expected:
-        strategy = strategy_by_id.get(strategy_id)
+        strategy = resolved_strategies.get(strategy_id)
         if not strategy:
             continue
         state = strategy.get("state")
         reason = strategy.get("last_reason")
         gates = strategy.get("risk_gates") or []
         parameters = strategy.get("parameters") or {}
+        actual_strategy_id = str(strategy.get("strategy_id") or strategy_id)
         if state in {None, "", "UNKNOWN"}:
-            errors.append(f"strategy {strategy_id} has no concrete state")
+            errors.append(f"strategy {actual_strategy_id} has no concrete state")
         if state in {"BLOCKED", "FAILED", "STOPPED"} and not reason:
-            errors.append(f"strategy {strategy_id} is {state} without reason")
+            errors.append(f"strategy {actual_strategy_id} is {state} without reason")
         if not isinstance(gates, list) or not gates:
-            warnings.append(f"strategy {strategy_id} has no risk gates")
+            warnings.append(f"strategy {actual_strategy_id} has no risk gates")
         if not isinstance(parameters, dict) or "component_role" not in parameters:
-            warnings.append(f"strategy {strategy_id} missing component_role parameter")
+            warnings.append(f"strategy {actual_strategy_id} missing component_role parameter")
         strategy_reports.append(
             {
-                "strategy_id": strategy_id,
+                "expected_strategy_id": strategy_id,
+                "strategy_id": actual_strategy_id,
+                "canonical_strategy_id": parameters.get("canonical_strategy_id") if isinstance(parameters, dict) else None,
+                "account_id": parameters.get("account_id") if isinstance(parameters, dict) else None,
                 "state": state,
                 "reason": reason,
                 "gate_count": len(gates) if isinstance(gates, list) else 0,
             }
         )
 
+    resolved_strategy_ids = {
+        str(strategy.get("strategy_id"))
+        for strategy in resolved_strategies.values()
+        if isinstance(strategy, dict) and strategy.get("strategy_id")
+    }
     active_blocks = risk.get("active_blocks") if isinstance(risk, dict) else []
     block_reports = []
     if isinstance(active_blocks, list):
@@ -166,7 +206,7 @@ def main() -> int:
                 continue
             scope = str(block.get("scope") or "")
             strategy_id = str(block.get("strategy_id") or "")
-            if args.account_id in scope or strategy_id in strategies_expected:
+            if args.account_id in scope or strategy_id in strategies_expected or strategy_id in resolved_strategy_ids:
                 block_reports.append(
                     {
                         "block_id": block.get("block_id"),

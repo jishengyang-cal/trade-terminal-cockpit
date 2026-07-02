@@ -365,6 +365,12 @@ pub struct AccountSnapshot {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrategyHeartbeat {
     pub strategy_id: String,
+    #[serde(default)]
+    pub canonical_strategy_id: Option<String>,
+    #[serde(default)]
+    pub strategy_instance_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
     pub state: String,
     pub mode: String,
     pub heartbeat_lag_ms: u64,
@@ -373,6 +379,12 @@ pub struct StrategyHeartbeat {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StrategyHealthUpdated {
     pub strategy_id: String,
+    #[serde(default)]
+    pub canonical_strategy_id: Option<String>,
+    #[serde(default)]
+    pub strategy_instance_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
     #[serde(default)]
@@ -511,6 +523,12 @@ pub struct StrategyRiskGateProjection {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StrategyStateChanged {
     pub strategy_id: String,
+    #[serde(default)]
+    pub canonical_strategy_id: Option<String>,
+    #[serde(default)]
+    pub strategy_instance_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
     pub state: String,
     pub mode: String,
     pub reason: String,

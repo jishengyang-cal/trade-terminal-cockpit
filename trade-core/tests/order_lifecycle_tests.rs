@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
 use trade_core::events::{
     AccountSnapshot, CancelRejected, CancelRequested, CommandAuditRecorded, DomainEvent,
     EventEnvelope, Fee, IntentCreated, MarketDataSummary, OrderFill, OrderSubmitRequested,
     OrderSubmitted, PositionSnapshot, RiskDecisionMade, RiskRuleEval, SignalGenerated,
-    StrategyHeartbeat, StrategyPositionAttribution,
+    StrategyHealthUpdated, StrategyHeartbeat, StrategyPositionAttribution,
 };
 use trade_core::state::OrderLifecycleState;
 use trade_core::{reduce_event, AppState, Money, Price};
@@ -660,6 +661,9 @@ fn coalesces_high_frequency_projection_events_without_dropping_lifecycle_events(
             "test",
             DomainEvent::StrategyHeartbeat(StrategyHeartbeat {
                 strategy_id: "open-scalp".to_string(),
+                canonical_strategy_id: None,
+                strategy_instance_id: None,
+                account_id: None,
                 state: "RUN".to_string(),
                 mode: "PAPER".to_string(),
                 heartbeat_lag_ms: 83,
@@ -675,6 +679,9 @@ fn coalesces_high_frequency_projection_events_without_dropping_lifecycle_events(
             "test",
             DomainEvent::StrategyHeartbeat(StrategyHeartbeat {
                 strategy_id: "open-scalp".to_string(),
+                canonical_strategy_id: None,
+                strategy_instance_id: None,
+                account_id: None,
                 state: "RUN".to_string(),
                 mode: "PAPER".to_string(),
                 heartbeat_lag_ms: 11,
@@ -733,6 +740,111 @@ fn coalesces_high_frequency_projection_events_without_dropping_lifecycle_events(
         .events
         .iter()
         .any(|event| event.event_type == "IntentCreated"));
+}
+
+#[test]
+fn account_scoped_strategy_health_creates_distinct_instances_and_drops_legacy_alias() {
+    let mut state = AppState::default();
+
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-strategy-legacy",
+            "corr-strategy",
+            1,
+            "test",
+            DomainEvent::StrategyHealthUpdated(StrategyHealthUpdated {
+                strategy_id: "order-flow-scalp".to_string(),
+                current_phase: Some("RUNNING".to_string()),
+                ..Default::default()
+            }),
+        ),
+    );
+    assert!(state.strategies.by_id.contains_key("order-flow-scalp"));
+
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-strategy-account-a",
+            "corr-strategy",
+            2,
+            "test",
+            DomainEvent::StrategyHealthUpdated(StrategyHealthUpdated {
+                strategy_id: "order-flow-scalp".to_string(),
+                canonical_strategy_id: Some("order-flow-scalp".to_string()),
+                strategy_instance_id: Some("DUP278164+paper/order-flow-scalp".to_string()),
+                account_id: Some("DUP278164+paper".to_string()),
+                current_phase: Some("RUNNING".to_string()),
+                parameters: BTreeMap::from([
+                    ("account_id".to_string(), "DUP278164+paper".to_string()),
+                    ("account_mode".to_string(), "paper".to_string()),
+                    (
+                        "canonical_strategy_id".to_string(),
+                        "order-flow-scalp".to_string(),
+                    ),
+                    (
+                        "strategy_instance_id".to_string(),
+                        "DUP278164+paper/order-flow-scalp".to_string(),
+                    ),
+                ]),
+                ..Default::default()
+            }),
+        ),
+    );
+
+    assert!(!state.strategies.by_id.contains_key("order-flow-scalp"));
+    let paper = state
+        .strategies
+        .by_id
+        .get("DUP278164+paper/order-flow-scalp")
+        .expect("paper strategy instance should be present");
+    assert_eq!(paper.account_id.as_deref(), Some("DUP278164+paper"));
+    assert_eq!(
+        paper.canonical_strategy_id.as_deref(),
+        Some("order-flow-scalp")
+    );
+
+    reduce_event(
+        &mut state,
+        EventEnvelope::new(
+            "evt-strategy-account-b",
+            "corr-strategy",
+            3,
+            "test",
+            DomainEvent::StrategyHealthUpdated(StrategyHealthUpdated {
+                strategy_id: "order-flow-scalp".to_string(),
+                canonical_strategy_id: Some("order-flow-scalp".to_string()),
+                strategy_instance_id: Some("ABC123+live/order-flow-scalp".to_string()),
+                account_id: Some("ABC123+live".to_string()),
+                current_phase: Some("RUNNING".to_string()),
+                parameters: BTreeMap::from([
+                    ("account_id".to_string(), "ABC123+live".to_string()),
+                    ("account_mode".to_string(), "live".to_string()),
+                    (
+                        "canonical_strategy_id".to_string(),
+                        "order-flow-scalp".to_string(),
+                    ),
+                    (
+                        "strategy_instance_id".to_string(),
+                        "ABC123+live/order-flow-scalp".to_string(),
+                    ),
+                ]),
+                ..Default::default()
+            }),
+        ),
+    );
+
+    let scoped_count = state
+        .strategies
+        .by_id
+        .values()
+        .filter(|strategy| strategy.canonical_strategy_id.as_deref() == Some("order-flow-scalp"))
+        .count();
+    assert_eq!(scoped_count, 2);
+    assert!(state
+        .strategies
+        .by_id
+        .contains_key("ABC123+live/order-flow-scalp"));
 }
 
 #[test]

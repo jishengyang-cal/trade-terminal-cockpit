@@ -226,6 +226,9 @@ fn map_market_data_summary(event: pb::MarketDataSummary) -> domain::MarketDataSu
 fn map_strategy_heartbeat(event: pb::StrategyHeartbeat) -> domain::StrategyHeartbeat {
     domain::StrategyHeartbeat {
         strategy_id: event.strategy_id,
+        canonical_strategy_id: None,
+        strategy_instance_id: None,
+        account_id: None,
         state: strategy_state(event.state),
         mode: account_mode(event.mode),
         heartbeat_lag_ms: event.heartbeat_lag_ms,
@@ -235,6 +238,9 @@ fn map_strategy_heartbeat(event: pb::StrategyHeartbeat) -> domain::StrategyHeart
 fn map_strategy_health(event: pb::StrategyHealthUpdated) -> domain::StrategyHealthUpdated {
     domain::StrategyHealthUpdated {
         strategy_id: event.strategy_id,
+        canonical_strategy_id: None,
+        strategy_instance_id: None,
+        account_id: None,
         enabled: event.enabled,
         trading_window: empty_to_none(event.trading_window),
         current_phase: empty_to_none(event.current_phase),
@@ -312,6 +318,9 @@ fn map_strategy_health(event: pb::StrategyHealthUpdated) -> domain::StrategyHeal
 fn map_strategy_state_changed(event: pb::StrategyStateChanged) -> domain::StrategyStateChanged {
     domain::StrategyStateChanged {
         strategy_id: event.strategy_id,
+        canonical_strategy_id: None,
+        strategy_instance_id: None,
+        account_id: None,
         state: strategy_state(event.state),
         mode: account_mode(event.mode),
         reason: event.reason,
