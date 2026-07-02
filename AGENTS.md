@@ -58,6 +58,15 @@ Development expectations:
 - Local workstation work is limited to light file inspection, editing,
   formatting that does not trigger compilation, git operations, and
   non-compiling policy checks.
+- For AI edit iterations in this repo, use `tools/codex_edit_gate.sh` as the
+  default local validation gate. It is intentionally limited to changed files
+  and syntax/whitespace checks. Do not run CodeGraph sync, GitNexus indexing,
+  gitleaks, full path-debt scans, `tools/verify_on_google_vm.sh`, or workspace
+  Rust tests after every edit.
+- Repo-wide scans are publish/audit operations. When a text scan is needed
+  during editing, scope it to the current repo and preferably to `git ls-files`
+  or the files changed by the task. Never scan `$HOME`, all trading repos, or
+  sibling repo roots as an edit-loop gate.
 - Update `Cargo.lock` on the Google VM when dependency changes are required,
   and keep the lockfile compatible with the repository `rust-version` unless the
   toolchain policy is explicitly changed.
